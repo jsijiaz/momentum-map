@@ -172,7 +172,7 @@ function makeDefaultTab(name) {
   return {
     id:genId(), name:name||"Version 1",
     initiatives:[], horizons:makeDefaultHorizons(),
-    settings:{mapTitle:"Momentum Map",brandName:"",brandLogoUrl:null},
+    settings:{mapTitle:"Momentum Map",brandName:"",brandLogoUrl:null,showMonthLines:false,groupByLayer:false},
     displayFields:["name","date","prize","category"],
     fontSize:11, labelWidth:200,
     pyramid:makeDefaultPyramid(),
@@ -507,6 +507,17 @@ function MomentumCanvas({initiatives,horizons,settings,displayFields,fontSize,la
       <div style={{position:"absolute",bottom:10,left:12,zIndex:200,fontSize:9,color:"#aaa",pointerEvents:"none",userSelect:"none"}}>Scroll to zoom · Drag to pan</div>
       <div id="momap-canvas" ref={canvasRef} style={{position:"absolute",inset:0,transformOrigin:"0 0",transform:`translate(${panX}px,${panY}px) scale(${zoom})`,background:"#fff",overflow:"visible"}} onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();setDropXFrac(null);if(!draggingInit)return;onDrop(draggingInit);}}>
         <img src={BG_URL} alt="" aria-hidden="true" crossOrigin="anonymous" style={{position:"absolute",left:0,right:0,top:BG_OFFSET_PX,width:"100%",height:`calc(100% - ${BG_OFFSET_PX}px)`,objectFit:"fill",pointerEvents:"none",userSelect:"none",display:"block"}} draggable={false}/>
+        {/* Month gridlines */}
+        {settings?.showMonthLines&&(()=>{const lines=[];const totalM=maxM-minM;if(totalM>0&&totalM<=120){for(let m=Math.ceil(minM);m<maxM;m++){const xf=(m-minM)/(maxM-minM);const isYearBoundary=m%12===0;lines.push(<div key={m} style={{position:"absolute",top:0,bottom:40,left:`${xf*100}%`,borderLeft:`1px solid rgba(0,0,0,${isYearBoundary?0.10:0.05})`,pointerEvents:"none"}}/>);if(isYearBoundary){const yr=Math.floor(m/12);lines.push(<div key={`yr${m}`} style={{position:"absolute",bottom:44,left:`${xf*100}%`,transform:"translateX(-50%)",fontSize:8,color:"rgba(0,0,0,0.25)",pointerEvents:"none",whiteSpace:"nowrap",fontWeight:600}}>{yr}</div>);}}}return lines;})()}
+        {/* Layer grouping bands */}
+        {settings?.groupByLayer&&(()=>{
+          const bands=[{cat:"WIN",center:27,h:18},{cat:"DIFF",center:46,h:18},{cat:"COMPETE",center:65,h:18},{cat:"OTHER",center:82,h:14}];
+          return bands.map(({cat,center,h})=>(
+            <div key={cat} style={{position:"absolute",left:0,right:0,top:`${center-h/2}%`,height:`${h}%`,background:CAT_COLORS[cat]+"12",borderTop:`1px solid ${CAT_COLORS[cat]}30`,borderBottom:`1px solid ${CAT_COLORS[cat]}30`,pointerEvents:"none"}}>
+              <div style={{position:"absolute",right:6,top:"50%",transform:"translateY(-50%)",fontSize:9,fontWeight:700,color:CAT_COLORS[cat],opacity:0.55,letterSpacing:"0.08em"}}>{cat}</div>
+            </div>
+          ));
+        })()}
         {dividers.map((xFrac,i)=>(
           <div key={i} style={{position:"absolute",top:0,bottom:40,left:`${xFrac*100}%`,borderLeft:"1.5px dashed rgba(30,30,30,0.28)",pointerEvents:"none"}}/>
         ))}
@@ -524,7 +535,8 @@ function MomentumCanvas({initiatives,horizons,settings,displayFields,fontSize,la
         {dropXFrac!=null&&draggingInit&&<div style={{position:"absolute",top:0,bottom:0,left:`${dropXFrac*100}%`,width:2,background:"#FF0983",opacity:0.6,pointerEvents:"none"}}/>}
         {initiatives.filter(i=>i.onMap).map(init=>{
           const xFrac=dateToX(init.date,minM,maxM);
-          const dotY=curveYCanvas(xFrac,canvasHeight);
+          const GROUP_Y={WIN:27,DIFF:46,COMPETE:65,OTHER:82};
+          const dotY=settings?.groupByLayer?(GROUP_Y[init.category]||55):curveYCanvas(xFrac,canvasHeight);
           const baseStem=typeof init.stemHeight==="number"?init.stemHeight:65;
           const autoExtra=(staggerOffsets[init.id]||0)*3;
           return (
@@ -569,7 +581,7 @@ function SettingsBar({settings,horizons,displayFields,fontSize,labelWidth,onTogg
         <button className="btn-secondary" onClick={()=>setShowDisplayPop(p=>!p)}>{IC.eye} Display</button>
         {showDisplayPop&&(<>
           <div style={{position:"fixed",inset:0,zIndex:99}} onClick={()=>setShowDisplayPop(false)}/>
-          <div style={{position:"absolute",top:"calc(100% + 8px)",right:0,background:"#fff",border:"1px solid #eee",borderRadius:12,padding:"12px 16px",boxShadow:"0 8px 28px rgba(0,0,0,0.1)",zIndex:100,minWidth:190}}>
+          <div style={{position:"absolute",top:"calc(100% + 8px)",right:0,background:"#fff",border:"1px solid #eee",borderRadius:12,padding:"12px 16px",boxShadow:"0 8px 28px rgba(0,0,0,0.1)",zIndex:100,minWidth:200}}>
             {DISPLAY_FIELDS.map(f=>(
               <div key={f.key} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"5px 0"}}>
                 <span style={{fontSize:12,color:"#444"}}>{f.label}</span>
@@ -578,6 +590,22 @@ function SettingsBar({settings,horizons,displayFields,fontSize,labelWidth,onTogg
                 </span>
               </div>
             ))}
+            <div style={{borderTop:"1px solid #f0f0f0",marginTop:6,paddingTop:6}}>
+              {[
+                {key:"showMonthLines",label:"Month gridlines"},
+                {key:"groupByLayer",label:"Group by layer"},
+              ].map(({key,label})=>{
+                const on=!!(settings[key]);
+                return(
+                  <div key={key} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"5px 0"}}>
+                    <span style={{fontSize:12,color:"#444"}}>{label}</span>
+                    <span style={{display:"inline-block",width:30,height:16,borderRadius:999,background:on?"#FF0983":"#e0e0e0",position:"relative",cursor:"pointer"}} onClick={()=>onUpdateSettings({[key]:!on})}>
+                      <div style={{position:"absolute",width:12,height:12,left:3,bottom:3,background:"#fff",borderRadius:"50%",transition:"transform 0.2s",transform:on?"translateX(14px)":"none"}}/>
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </>)}
       </div>
@@ -683,7 +711,7 @@ function InitiativeCard({init,onDelete,onUpdate,onDragStart,onDragEnd,blockNames
 
 // ── Export initiatives to XLSX ────────────────────────────────────────────
 function exportInitiativesToExcel(initiatives) {
-  const headers=["Initiative Name","Description","Month","Year","Prize","Category","Owner","Progress","Block Name"];
+  const headers=["Initiative Name","Description","Month","Year","Prize","Category","Owner","Progress","Block Name","Changed Fields"];
   const rows=initiatives.map(i=>{
     const [yr,mo]=(i.date||"").split("-");
     return [
@@ -696,11 +724,49 @@ function exportInitiativesToExcel(initiatives) {
       i.owner||"",
       i.progress||"",
       i.blockName||"",
+      "", // placeholder for Changed Fields
     ];
   });
   const ws=XLSX.utils.aoa_to_sheet([headers,...rows]);
-  // Column widths
-  ws['!cols']=[{wch:30},{wch:40},{wch:8},{wch:6},{wch:8},{wch:10},{wch:20},{wch:14},{wch:20}];
+  ws['!cols']=[{wch:30},{wch:40},{wch:8},{wch:6},{wch:8},{wch:10},{wch:20},{wch:14},{wch:20},{wch:28}];
+
+  // Style header row bold
+  headers.forEach((_,ci)=>{
+    const a=XLSX.utils.encode_cell({r:0,c:ci});
+    if(ws[a]) ws[a].s={font:{bold:true}};
+  });
+
+  // Highlight changed cells vs _original
+  const CHANGE_STYLE={font:{color:{rgb:"C04800"},bold:true}};
+  const eq=(a,b)=>String(a??"")===String(b??"");
+  initiatives.forEach((init,ri)=>{
+    const orig=init._original;
+    if(!orig) return;
+    const [yr,mo]=(init.date||"").split("-");
+    const [oyr,omo]=(orig.date||"").split("-");
+    const checks=[
+      {c:0, changed:!eq(init.name,orig.name)},
+      {c:1, changed:!eq(init.description,orig.description)},
+      {c:2, changed:(mo||"")!==(omo||"")},
+      {c:3, changed:(yr||"")!==(oyr||"")},
+      {c:4, changed:!eq(init.prize,orig.prize)},
+      {c:5, changed:!eq(init.category,orig.category)},
+      {c:6, changed:!eq(init.owner,orig.owner)},
+      {c:7, changed:!eq(init.progress,orig.progress)},
+      {c:8, changed:!eq(init.blockName,orig.blockName)},
+    ];
+    const changedNames=checks.filter(x=>x.changed).map(x=>headers[x.c]);
+    checks.forEach(({c,changed})=>{
+      if(!changed) return;
+      const a=XLSX.utils.encode_cell({r:ri+1,c});
+      if(ws[a]) ws[a].s=CHANGE_STYLE;
+    });
+    if(changedNames.length){
+      const a=XLSX.utils.encode_cell({r:ri+1,c:9});
+      if(ws[a]){ws[a].v=changedNames.join(", ");ws[a].s=CHANGE_STYLE;}
+    }
+  });
+
   const wb=XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb,ws,"Initiatives");
   XLSX.writeFile(wb,"momentum-map-initiatives.xlsx");
@@ -776,6 +842,7 @@ function buildWorkbook(initiatives) {
 // ── Initiative Panel ─────────────────────────────────────────────────────────
 function InitiativePanel({initiatives,onAdd,onDelete,onUpdate,onDragStart,onDragEnd,pyramid,syncUrl,onSetSyncUrl,panelWidth,onPanelEdgeDown}) {
   const [form,setForm]=useState({name:"",date:nowYYYYMM(),description:"",prize:"",category:"WIN",owner:"",progress:"",blockName:""});
+  const [searchQuery,setSearchQuery]=useState("");
   const [filterCat,setFilterCat]=useState("ALL");
   const [filterProgress,setFilterProgress]=useState("ALL");
   const [filterBlock,setFilterBlock]=useState("ALL");
@@ -880,7 +947,7 @@ function InitiativePanel({initiatives,onAdd,onDelete,onUpdate,onDragStart,onDrag
       const rawProg=ci.progress>=0?String(row[ci.progress]||"").trim():"";
       const progress=PROGRESS_OPTIONS.includes(rawProg)?rawProg:null;
       const blockName=ci.blockName>=0?String(row[ci.blockName]||"").trim()||null:null;
-      added.push({id:genId(),name,date,description:desc,prize,category,owner,progress,blockName,offsetY:0,stemHeight:65,onMap:true});
+      added.push({id:genId(),name,date,description:desc,prize,category,owner,progress,blockName,offsetY:0,stemHeight:65,onMap:true,_original:{name,date,description:desc,prize,category,owner,progress,blockName}});
     }
     return added;
   };
@@ -930,7 +997,9 @@ function InitiativePanel({initiatives,onAdd,onDelete,onUpdate,onDragStart,onDrag
   const handleAdd=()=>{
     if(!form.name.trim()) return showToastMsg("Name is required",true);
     if(!form.date||!validateDate(form.date)) return showToastMsg(`Date must be ${MIN_YEAR} or later`,true);
-    onAdd({id:genId(),name:form.name.trim(),date:form.date,description:form.description,prize:form.prize?parseFloat(form.prize):null,category:form.category,owner:form.owner||null,progress:form.progress||null,blockName:form.blockName||null,offsetY:0,stemHeight:65});
+    const newInit={id:genId(),name:form.name.trim(),date:form.date,description:form.description,prize:form.prize?parseFloat(form.prize):null,category:form.category,owner:form.owner||null,progress:form.progress||null,blockName:form.blockName||null,offsetY:0,stemHeight:65};
+    newInit._original={name:newInit.name,date:newInit.date,description:newInit.description,prize:newInit.prize,category:newInit.category,owner:newInit.owner,progress:newInit.progress,blockName:newInit.blockName};
+    onAdd(newInit);
     setForm({name:"",date:nowYYYYMM(),description:"",prize:"",category:"WIN",owner:"",progress:"",blockName:""});
     showToastMsg("Initiative added ✓",false);
   };
@@ -957,6 +1026,7 @@ function InitiativePanel({initiatives,onAdd,onDelete,onUpdate,onDragStart,onDrag
   if(filterProgress!=="ALL") filtered=filtered.filter(i=>(i.progress||"")===filterProgress);
   if(filterBlock!=="ALL") filtered=filtered.filter(i=>(i.blockName||"")===filterBlock);
   if(filterOwner.trim()){const ownerTerms=filterOwner.split(",").map(o=>o.trim().toLowerCase()).filter(Boolean);filtered=filtered.filter(i=>ownerTerms.some(o=>(i.owner||"").toLowerCase().includes(o)));}
+  if(searchQuery.trim()){const q=searchQuery.trim().toLowerCase();filtered=filtered.filter(i=>(i.name||"").toLowerCase().includes(q)||(i.description||"").toLowerCase().includes(q)||(i.owner||"").toLowerCase().includes(q)||(i.blockName||"").toLowerCase().includes(q));}
   // owner suggestions from all initiatives
   const allOwners=[...new Set(initiatives.map(i=>i.owner).filter(Boolean))].sort();
 
@@ -1015,6 +1085,12 @@ function InitiativePanel({initiatives,onAdd,onDelete,onUpdate,onDragStart,onDrag
       </div>
       {/* Filters */}
       <div style={{padding:"8px 10px",borderBottom:"1px solid #eee",background:"#fff",flexShrink:0,display:"flex",flexDirection:"column",gap:5}}>
+        {/* Search */}
+        <div style={{position:"relative"}}>
+          <svg style={{position:"absolute",left:7,top:"50%",transform:"translateY(-50%)",pointerEvents:"none",color:"#bbb"}} width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input value={searchQuery} onChange={e=>setSearchQuery(e.target.value)} placeholder="Search by name, owner, block…" style={{width:"100%",paddingLeft:24,paddingRight:searchQuery?24:8,paddingTop:5,paddingBottom:5,fontSize:11,border:"1px solid #e5e5e5",borderRadius:7,outline:"none",background:"#fafafa",boxSizing:"border-box"}} onFocus={e=>{e.target.style.borderColor="#FF0983";e.target.style.background="#fff";}} onBlur={e=>{e.target.style.borderColor="#e5e5e5";e.target.style.background="#fafafa";}}/>
+          {searchQuery&&<button onClick={()=>setSearchQuery("")} style={{position:"absolute",right:6,top:"50%",transform:"translateY(-50%)",color:"#bbb",padding:2,lineHeight:1,background:"none",border:"none",cursor:"pointer",fontSize:14}} onMouseEnter={e=>e.currentTarget.style.color="#555"} onMouseLeave={e=>e.currentTarget.style.color="#bbb"}>×</button>}
+        </div>
         {/* Row 1: Layer + Not Placed + Status + Owner pills */}
         <div style={{display:"flex",alignItems:"center",gap:4,flexWrap:"wrap"}}>
           <span style={{fontSize:9,color:"#bbb",fontWeight:600,textTransform:"uppercase",letterSpacing:"0.06em",marginRight:2}}>Filter</span>
@@ -2265,7 +2341,7 @@ function MapView({tab,onUpdate,saveStatus}) {
     panelDragRef.current={active:true,startX:e.clientX,startW:panelWidth};
     const onMove=me=>{
       const dx=me.clientX-panelDragRef.current.startX;
-      setPanelWidth(Math.max(220,Math.min(540,panelDragRef.current.startW-dx)));
+      setPanelWidth(Math.max(220,Math.min(780,panelDragRef.current.startW-dx)));
     };
     const onUp=()=>{window.removeEventListener("mousemove",onMove);window.removeEventListener("mouseup",onUp);};
     window.addEventListener("mousemove",onMove);
