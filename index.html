@@ -172,7 +172,7 @@ function makeDefaultTab(name) {
   return {
     id:genId(), name:name||"Version 1",
     initiatives:[], horizons:makeDefaultHorizons(),
-    settings:{mapTitle:"Momentum Map",brandName:"",brandLogoUrl:null,showMonthLines:false,groupByLayer:false},
+    settings:{mapTitle:"Momentum Map",brandName:"",brandLogoUrl:null,showMonthLines:false,groupByLayer:false,hiddenLayers:[]},
     displayFields:["name","date","prize","category"],
     fontSize:11, labelWidth:200,
     pyramid:makeDefaultPyramid(),
@@ -356,31 +356,22 @@ function InitiativePin({init,xPct,dotYPct,displayFields,fontSize,labelWidth,minM
     if(e.button!==0) return;
     e.preventDefault(); e.stopPropagation();
     setDotDragging(true); setPinned(false);
-    dotDragRef.current={y:e.clientY,x:e.clientX,origOffset:OFFY};
+    dotDragRef.current={y:e.clientY,x:e.clientX};
     const up=()=>{setDotDragging(false);window.removeEventListener("mouseup",up);window.removeEventListener("mousemove",mv);};
     const mv=me=>{
       const el=document.getElementById("momap-canvas");
       if(!el) return;
       const rect=el.getBoundingClientRect();
-      const ch=el.offsetHeight||700;
-      if(onUpdateDateAndOffset&&minM!=null&&maxM!=null){
-        // Compute new date from absolute mouse-x (rect already accounts for zoom+pan)
+      if(minM!=null&&maxM!=null){
+        // Horizontal drag only — dot always stays on the curve
         const xFrac=Math.max(0,Math.min(1,(me.clientX-rect.left)/rect.width));
         const newDate=monthsToDate(Math.round(minM+xFrac*(maxM-minM)));
         if(!validateDate(newDate)) return;
-        // Compute vertical offset: distance of mouse from the curve at this x-position
-        // Dividing by rect.height (= ch * zoom) converts screen-px → canvas-coordinate %
-        const mouseYPct=(me.clientY-rect.top)/rect.height*100;
-        const curveY=curveYCanvas(xFrac,ch);
-        // Single atomic update — avoids React batching overwriting the date change
-        onUpdateDateAndOffset(newDate, mouseYPct-curveY);
-      } else {
-        // Fallback: pure vertical drag (no horizontal date tracking)
-        onUpdateOffsetY(dotDragRef.current.origOffset+((me.clientY-dotDragRef.current.y)/rect.height)*100);
+        onUpdateDate(newDate);
       }
     };
     window.addEventListener("mousemove",mv);window.addEventListener("mouseup",up);
-  },[OFFY,onUpdateOffsetY,onUpdateDate,onUpdateDateAndOffset,minM,maxM]);
+  },[minM,maxM,onUpdateDate]);
 
   const handleLblDown=useCallback(e=>{
     if(e.button!==0) return;
@@ -409,7 +400,7 @@ function InitiativePin({init,xPct,dotYPct,displayFields,fontSize,labelWidth,minM
   const showTooltip=(pinned||hovered)&&!dotDragging&&!lblDragging&&!wDragging;
 
   return (
-    <div style={{position:"absolute",left:`${xPct}%`,top:`${dotYPct+OFFY}%`,transform:"translate(-50%,-50%)",zIndex:showTooltip||dotDragging?50:10,userSelect:"none"}}>
+    <div style={{position:"absolute",left:`${xPct}%`,top:`${dotYPct}%`,transform:"translate(-50%,-50%)",zIndex:showTooltip||dotDragging?50:10,userSelect:"none"}}>
       <div style={{position:"absolute",bottom:`calc(100% + ${STEM}px)`,left:"50%",transform:"translateX(-50%)",textAlign:"center",width:LWIDTH,maxWidth:LWIDTH,boxSizing:"border-box",cursor:"ns-resize",pointerEvents:"auto",background:"rgba(255,255,255,0.55)",borderRadius:7,padding:"3px 6px",backdropFilter:"blur(2px)",WebkitBackdropFilter:"blur(2px)"}} onMouseDown={handleLblDown} title="Drag up/down to adjust stem height">
         {/* right-edge width resize handle */}
         <div onMouseDown={handleWidthDown} title="Drag to resize label width" style={{position:"absolute",top:0,bottom:0,right:-4,width:8,cursor:"ew-resize",zIndex:5,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={e=>e.stopPropagation()}>
@@ -533,7 +524,7 @@ function MomentumCanvas({initiatives,horizons,settings,displayFields,fontSize,la
           );
         })}
         {dropXFrac!=null&&draggingInit&&<div style={{position:"absolute",top:0,bottom:0,left:`${dropXFrac*100}%`,width:2,background:"#FF0983",opacity:0.6,pointerEvents:"none"}}/>}
-        {initiatives.filter(i=>i.onMap).map(init=>{
+        {initiatives.filter(i=>i.onMap&&!(settings?.hiddenLayers||[]).includes(i.category)).map(init=>{
           const xFrac=dateToX(init.date,minM,maxM);
           // Dot always follows the curve
           const dotY=curveYCanvas(xFrac,canvasHeight);
@@ -542,7 +533,7 @@ function MomentumCanvas({initiatives,horizons,settings,displayFields,fontSize,la
           // In groupByLayer mode, compute stem so label lands in the category band
           const GROUP_Y={WIN:27,DIFF:46,COMPETE:65,OTHER:82};
           const stemOverride=settings?.groupByLayer
-            ?Math.max(10,Math.round((dotY-GROUP_Y[init.category||"OTHER"]||dotY-50)/100*canvasHeight))
+            ?Math.max(10,Math.round((dotY-(GROUP_Y[init.category]??50))/100*canvasHeight))
             :null;
           const finalStem=stemOverride!==null?stemOverride:Math.max(20,baseStem+autoExtra);
           return (
@@ -611,6 +602,22 @@ function SettingsBar({settings,horizons,displayFields,fontSize,labelWidth,onTogg
                   </div>
                 );
               })}
+            </div>
+            <div style={{borderTop:"1px solid #f0f0f0",marginTop:6,paddingTop:8}}>
+              <div style={{fontSize:10,color:"#aaa",fontWeight:600,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:6}}>Show layers</div>
+              <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
+                {CATEGORIES.map(cat=>{
+                  const hidden=(settings.hiddenLayers||[]).includes(cat);
+                  return(
+                    <button key={cat} onClick={()=>{
+                      const cur=settings.hiddenLayers||[];
+                      onUpdateSettings({hiddenLayers:hidden?cur.filter(c=>c!==cat):[...cur,cat]});
+                    }} style={{fontSize:10,fontWeight:700,padding:"3px 9px",borderRadius:999,border:`1.5px solid ${CAT_COLORS[cat]}`,color:hidden?"#bbb":CAT_COLORS[cat],background:hidden?"#f5f5f5":"transparent",cursor:"pointer",textDecoration:hidden?"line-through":"none",transition:"all .12s"}}>
+                      {cat}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           </div>
         </>)}
