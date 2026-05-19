@@ -535,12 +535,18 @@ function MomentumCanvas({initiatives,horizons,settings,displayFields,fontSize,la
         {dropXFrac!=null&&draggingInit&&<div style={{position:"absolute",top:0,bottom:0,left:`${dropXFrac*100}%`,width:2,background:"#FF0983",opacity:0.6,pointerEvents:"none"}}/>}
         {initiatives.filter(i=>i.onMap).map(init=>{
           const xFrac=dateToX(init.date,minM,maxM);
-          const GROUP_Y={WIN:27,DIFF:46,COMPETE:65,OTHER:82};
-          const dotY=settings?.groupByLayer?(GROUP_Y[init.category]||55):curveYCanvas(xFrac,canvasHeight);
+          // Dot always follows the curve
+          const dotY=curveYCanvas(xFrac,canvasHeight);
           const baseStem=typeof init.stemHeight==="number"?init.stemHeight:65;
           const autoExtra=(staggerOffsets[init.id]||0)*3;
+          // In groupByLayer mode, compute stem so label lands in the category band
+          const GROUP_Y={WIN:27,DIFF:46,COMPETE:65,OTHER:82};
+          const stemOverride=settings?.groupByLayer
+            ?Math.max(10,Math.round((dotY-GROUP_Y[init.category||"OTHER"]||dotY-50)/100*canvasHeight))
+            :null;
+          const finalStem=stemOverride!==null?stemOverride:Math.max(20,baseStem+autoExtra);
           return (
-            <InitiativePin key={init.id} init={{...init,stemHeight:Math.max(20,baseStem+autoExtra)}} xPct={Math.max(2,Math.min(98,xFrac*100))} dotYPct={dotY} displayFields={displayFields} fontSize={fontSize} labelWidth={labelWidth} minM={minM} maxM={maxM} onUpdateDate={date=>onUpdateInitiative(init.id,{date})} onUpdateOffsetY={o=>onUpdateInitiative(init.id,{offsetY:o})} onUpdateDateAndOffset={(date,offsetY)=>onUpdateInitiative(init.id,{date,offsetY})} onUpdateStemHeight={h=>onUpdateInitiative(init.id,{stemHeight:h})} onUpdateLabelWidth={w=>onUpdateInitiative(init.id,{labelWidth:w})} onRemoveFromMap={()=>onUpdateInitiative(init.id,{onMap:false,offsetY:0})}/>
+            <InitiativePin key={init.id} init={{...init,stemHeight:finalStem}} xPct={Math.max(2,Math.min(98,xFrac*100))} dotYPct={dotY} displayFields={displayFields} fontSize={fontSize} labelWidth={labelWidth} minM={minM} maxM={maxM} onUpdateDate={date=>onUpdateInitiative(init.id,{date})} onUpdateOffsetY={o=>onUpdateInitiative(init.id,{offsetY:o})} onUpdateDateAndOffset={(date,offsetY)=>onUpdateInitiative(init.id,{date,offsetY})} onUpdateStemHeight={h=>onUpdateInitiative(init.id,{stemHeight:h})} onUpdateLabelWidth={w=>onUpdateInitiative(init.id,{labelWidth:w})} onRemoveFromMap={()=>onUpdateInitiative(init.id,{onMap:false,offsetY:0})}/>
           );
         })}
       </div>
