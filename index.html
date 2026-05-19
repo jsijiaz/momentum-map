@@ -65,6 +65,7 @@ const BG_OFFSET_PX = 125;
 const MIN_YEAR = 2020;
 const PYRAMID_LAYERS = ["WIN","DIFF","COMPETE","FOUNDATION"];
 const RYG_COLORS = { R:"#ef4444", Y:"#f59e0b", G:"#22c55e" };
+const PYRAMID_RYG = { R:"#FFC9CB", Y:"#FFE9AD", G:"#BDF4C2", _none:"#E1DFDE" };
 const PROGRESS_OPTIONS = ["Not Started","On-track","Complete","Roadblock"];
 const PROGRESS_COLORS = {
   "Not Started":  { bg:"#f3f4f6", color:"#6b7280", dot:"#9ca3af" },
@@ -89,6 +90,31 @@ function generateSessionId() {
 }
 function isValidSessionId(s) {
   return /^[A-Z0-9]{8}$/.test(s);
+}
+function encodeState(obj) {
+  try {
+    const json=JSON.stringify(obj);
+    const uint8=new TextEncoder().encode(json);
+    let bin=''; uint8.forEach(b=>bin+=String.fromCharCode(b));
+    return btoa(bin).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+  } catch(e){ return null; }
+}
+function decodeState(b64) {
+  try {
+    const padded=b64.replace(/-/g,'+').replace(/_/g,'/')+('==='.slice(0,(4-b64.length%4)%4));
+    const bin=atob(padded);
+    const uint8=new Uint8Array(bin.length);
+    for(let i=0;i<bin.length;i++) uint8[i]=bin.charCodeAt(i);
+    return JSON.parse(new TextDecoder().decode(uint8));
+  } catch(e){ return null; }
+}
+function getEncodedStateFromHash() {
+  const m=window.location.hash.match(/[#&]s=([A-Za-z0-9\-_]+)/);
+  return m?decodeState(m[1]):null;
+}
+function setHashWithState(sid,state) {
+  const enc=encodeState(state);
+  window.location.hash=enc?`session=${sid}&s=${enc}`:`session=${sid}`;
 }
 
 // ── Utils ──────────────────────────────────────────────────────────────────
@@ -125,6 +151,7 @@ function makeDefaultPyramid() {
     layerDescriptions:{ WIN:"", DIFF:"", COMPETE:"" },
     showFoundation:true,
     dividerOffsets:{},
+    rowAssignments:{},
     layers:{
       WIN:[ {id:genId(),name:"Block Name",description:"",ryg:null},{id:genId(),name:"Block Name",description:"",ryg:null},{id:genId(),name:"Block Name",description:"",ryg:null} ],
       DIFF:[ {id:genId(),name:"Block Name",description:"",ryg:null},{id:genId(),name:"Block Name",description:"",ryg:null},{id:genId(),name:"Block Name",description:"",ryg:null},{id:genId(),name:"Block Name",description:"",ryg:null} ],
@@ -300,18 +327,21 @@ const DISPLAY_FIELDS=[
 ];
 
 // ── Initiative Pin ─────────────────────────────────────────────────────────
-function InitiativePin({init,xPct,dotYPct,displayFields,fontSize,labelWidth,onUpdateDate,onUpdateOffsetY,onUpdateStemHeight,onRemoveFromMap}) {
+function InitiativePin({init,xPct,dotYPct,displayFields,fontSize,labelWidth,minM,maxM,onUpdateDate,onUpdateOffsetY,onUpdateDateAndOffset,onUpdateStemHeight,onUpdateLabelWidth,onRemoveFromMap}) {
   const [pinned,setPinned]=useState(false);
   const [hovered,setHovered]=useState(false);
   const [dotDragging,setDotDragging]=useState(false);
   const [lblDragging,setLblDragging]=useState(false);
-  const dotDragRef=useRef({y:0,origOffset:0});
+  const [wDragging,setWDragging]=useState(false);
+  const dotDragRef=useRef({y:0,x:0,origOffset:0});
   const lblDragRef=useRef({y:0,origStem:65});
+  const wDragRef=useRef({x:0,origW:200});
   const tooltipRef=useRef(null);
   const dotRef=useRef(null);
   const color=CAT_COLORS[init.category]||"#A4A09F";
   const STEM=typeof init.stemHeight==="number"?init.stemHeight:65;
   const OFFY=typeof init.offsetY==="number"?init.offsetY:0;
+  const LWIDTH=typeof init.labelWidth==="number"?init.labelWidth:(labelWidth||200);
   const fs=fontSize||11;
   const progStyle=init.progress?PROGRESS_COLORS[init.progress]:null;
 
@@ -326,11 +356,31 @@ function InitiativePin({init,xPct,dotYPct,displayFields,fontSize,labelWidth,onUp
     if(e.button!==0) return;
     e.preventDefault(); e.stopPropagation();
     setDotDragging(true); setPinned(false);
-    dotDragRef.current={y:e.clientY,origOffset:OFFY};
+    dotDragRef.current={y:e.clientY,x:e.clientX,origOffset:OFFY};
     const up=()=>{setDotDragging(false);window.removeEventListener("mouseup",up);window.removeEventListener("mousemove",mv);};
-    const mv=me=>{const ch=document.getElementById("momap-canvas")?.offsetHeight||700;onUpdateOffsetY(dotDragRef.current.origOffset+((me.clientY-dotDragRef.current.y)/ch)*100);};
+    const mv=me=>{
+      const el=document.getElementById("momap-canvas");
+      if(!el) return;
+      const rect=el.getBoundingClientRect();
+      const ch=el.offsetHeight||700;
+      if(onUpdateDateAndOffset&&minM!=null&&maxM!=null){
+        // Compute new date from absolute mouse-x (rect already accounts for zoom+pan)
+        const xFrac=Math.max(0,Math.min(1,(me.clientX-rect.left)/rect.width));
+        const newDate=monthsToDate(Math.round(minM+xFrac*(maxM-minM)));
+        if(!validateDate(newDate)) return;
+        // Compute vertical offset: distance of mouse from the curve at this x-position
+        // Dividing by rect.height (= ch * zoom) converts screen-px → canvas-coordinate %
+        const mouseYPct=(me.clientY-rect.top)/rect.height*100;
+        const curveY=curveYCanvas(xFrac,ch);
+        // Single atomic update — avoids React batching overwriting the date change
+        onUpdateDateAndOffset(newDate, mouseYPct-curveY);
+      } else {
+        // Fallback: pure vertical drag (no horizontal date tracking)
+        onUpdateOffsetY(dotDragRef.current.origOffset+((me.clientY-dotDragRef.current.y)/rect.height)*100);
+      }
+    };
     window.addEventListener("mousemove",mv);window.addEventListener("mouseup",up);
-  },[OFFY,onUpdateOffsetY]);
+  },[OFFY,onUpdateOffsetY,onUpdateDate,onUpdateDateAndOffset,minM,maxM]);
 
   const handleLblDown=useCallback(e=>{
     if(e.button!==0) return;
@@ -338,15 +388,33 @@ function InitiativePin({init,xPct,dotYPct,displayFields,fontSize,labelWidth,onUp
     setLblDragging(true);
     lblDragRef.current={y:e.clientY,origStem:STEM};
     const up=()=>{setLblDragging(false);window.removeEventListener("mouseup",up);window.removeEventListener("mousemove",mv);};
-    const mv=me=>{onUpdateStemHeight(Math.max(20,Math.min(350,lblDragRef.current.origStem+(lblDragRef.current.y-me.clientY))));};
+    const mv=me=>{onUpdateStemHeight(Math.max(20,Math.min(800,lblDragRef.current.origStem+(lblDragRef.current.y-me.clientY))));};
     window.addEventListener("mousemove",mv);window.addEventListener("mouseup",up);
   },[STEM,onUpdateStemHeight]);
 
-  const showTooltip=(pinned||hovered)&&!dotDragging&&!lblDragging;
+  const handleWidthDown=useCallback(e=>{
+    if(e.button!==0) return;
+    e.preventDefault(); e.stopPropagation();
+    setWDragging(true);
+    wDragRef.current={x:e.clientX,origW:LWIDTH};
+    const up=()=>{setWDragging(false);window.removeEventListener("mouseup",up);window.removeEventListener("mousemove",mv);};
+    const mv=me=>{
+      const delta=me.clientX-wDragRef.current.x;
+      const newW=Math.max(80,Math.min(500,wDragRef.current.origW+delta*2));
+      if(onUpdateLabelWidth) onUpdateLabelWidth(Math.round(newW));
+    };
+    window.addEventListener("mousemove",mv);window.addEventListener("mouseup",up);
+  },[LWIDTH,onUpdateLabelWidth]);
+
+  const showTooltip=(pinned||hovered)&&!dotDragging&&!lblDragging&&!wDragging;
 
   return (
     <div style={{position:"absolute",left:`${xPct}%`,top:`${dotYPct+OFFY}%`,transform:"translate(-50%,-50%)",zIndex:showTooltip||dotDragging?50:10,userSelect:"none"}}>
-      <div style={{position:"absolute",bottom:`calc(100% + ${STEM}px)`,left:"50%",transform:"translateX(-50%)",textAlign:"center",width:labelWidth||200,maxWidth:labelWidth||200,cursor:"ns-resize",pointerEvents:"auto",background:"rgba(255,255,255,0.55)",borderRadius:7,padding:"3px 6px",backdropFilter:"blur(2px)",WebkitBackdropFilter:"blur(2px)"}} onMouseDown={handleLblDown} title="Drag to adjust line length">
+      <div style={{position:"absolute",bottom:`calc(100% + ${STEM}px)`,left:"50%",transform:"translateX(-50%)",textAlign:"center",width:LWIDTH,maxWidth:LWIDTH,boxSizing:"border-box",cursor:"ns-resize",pointerEvents:"auto",background:"rgba(255,255,255,0.55)",borderRadius:7,padding:"3px 6px",backdropFilter:"blur(2px)",WebkitBackdropFilter:"blur(2px)"}} onMouseDown={handleLblDown} title="Drag up/down to adjust stem height">
+        {/* right-edge width resize handle */}
+        <div onMouseDown={handleWidthDown} title="Drag to resize label width" style={{position:"absolute",top:0,bottom:0,right:-4,width:8,cursor:"ew-resize",zIndex:5,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={e=>e.stopPropagation()}>
+          <div style={{width:2,height:14,borderRadius:1,background:"rgba(100,100,100,0.25)"}}/>
+        </div>
         {displayFields.includes("name")&&<div style={{fontSize:fs,fontWeight:700,color:"#121212",lineHeight:1.35,whiteSpace:"normal",wordBreak:"break-word"}}>{init.name}</div>}
         {displayFields.includes("description")&&init.description&&<div style={{fontSize:fs-1,color:"#777",marginTop:1,lineHeight:1.3}}>{init.description.length>50?init.description.slice(0,50)+"...":init.description}</div>}
         {displayFields.includes("date")&&<div style={{fontSize:fs-1,color:"#666",marginTop:1}}>{fmtDate(init.date)}</div>}
@@ -429,7 +497,7 @@ function MomentumCanvas({initiatives,horizons,settings,displayFields,fontSize,la
   const staggerOffsets=useMemo(()=>computeStaggerOffsets(initiatives,minM,maxM,canvasWidth),[initiatives,minM,maxM,canvasWidth]);
 
   return (
-    <div id="momap-canvas-outer" ref={outerRef} style={{flex:1,position:"relative",overflow:"hidden",background:"#fff",minHeight:0}} onMouseDown={handleOuterMouseDown} onDragOver={e=>e.preventDefault()} onDragLeave={()=>setDropXFrac(null)} onDrop={e=>{e.preventDefault();setDropXFrac(null);if(!draggingInit)return;onDrop(draggingInit);}}>
+    <div id="momap-canvas-outer" ref={outerRef} style={{flex:1,position:"relative",overflowX:"hidden",overflowY:"visible",background:"#fff",minHeight:0}} onMouseDown={handleOuterMouseDown} onDragOver={e=>e.preventDefault()} onDragLeave={()=>setDropXFrac(null)} onDrop={e=>{e.preventDefault();setDropXFrac(null);if(!draggingInit)return;onDrop(draggingInit);}}>
       <div style={{position:"absolute",bottom:48,right:12,zIndex:200,display:"flex",flexDirection:"column",gap:4}}>
         <button onClick={()=>setZoom(z=>+Math.min(ZOOM_MAX,z+ZOOM_STEP).toFixed(2))} style={{width:30,height:30,borderRadius:6,border:"1px solid #ddd",background:"rgba(255,255,255,0.92)",fontSize:18,lineHeight:1,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 2px 6px rgba(0,0,0,0.15)"}}>+</button>
         <button onClick={()=>setZoom(z=>+Math.max(ZOOM_MIN,z-ZOOM_STEP).toFixed(2))} style={{width:30,height:30,borderRadius:6,border:"1px solid #ddd",background:"rgba(255,255,255,0.92)",fontSize:18,lineHeight:1,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 2px 6px rgba(0,0,0,0.15)"}}>−</button>
@@ -460,7 +528,7 @@ function MomentumCanvas({initiatives,horizons,settings,displayFields,fontSize,la
           const baseStem=typeof init.stemHeight==="number"?init.stemHeight:65;
           const autoExtra=(staggerOffsets[init.id]||0)*3;
           return (
-            <InitiativePin key={init.id} init={{...init,stemHeight:Math.max(20,baseStem+autoExtra)}} xPct={Math.max(2,Math.min(98,xFrac*100))} dotYPct={dotY} displayFields={displayFields} fontSize={fontSize} labelWidth={labelWidth} onUpdateDate={date=>onUpdateInitiative(init.id,{date})} onUpdateOffsetY={o=>onUpdateInitiative(init.id,{offsetY:o})} onUpdateStemHeight={h=>onUpdateInitiative(init.id,{stemHeight:h})} onRemoveFromMap={()=>onUpdateInitiative(init.id,{onMap:false,offsetY:0})}/>
+            <InitiativePin key={init.id} init={{...init,stemHeight:Math.max(20,baseStem+autoExtra)}} xPct={Math.max(2,Math.min(98,xFrac*100))} dotYPct={dotY} displayFields={displayFields} fontSize={fontSize} labelWidth={labelWidth} minM={minM} maxM={maxM} onUpdateDate={date=>onUpdateInitiative(init.id,{date})} onUpdateOffsetY={o=>onUpdateInitiative(init.id,{offsetY:o})} onUpdateDateAndOffset={(date,offsetY)=>onUpdateInitiative(init.id,{date,offsetY})} onUpdateStemHeight={h=>onUpdateInitiative(init.id,{stemHeight:h})} onUpdateLabelWidth={w=>onUpdateInitiative(init.id,{labelWidth:w})} onRemoveFromMap={()=>onUpdateInitiative(init.id,{onMap:false,offsetY:0})}/>
           );
         })}
       </div>
@@ -519,7 +587,7 @@ function SettingsBar({settings,horizons,displayFields,fontSize,labelWidth,onTogg
 }
 
 // ── Initiative Card ─────────────────────────────────────────────────────────
-function InitiativeCard({init,onDelete,onUpdate,onDragStart,onDragEnd,blockNames}) {
+function InitiativeCard({init,onDelete,onUpdate,onDragStart,onDragEnd,blockNames,blockNamesByLayer}) {
   const [expanded,setExpanded]=useState(false);
   const [editing,setEditing]=useState(false);
   const [draft,setDraft]=useState({...init});
@@ -578,9 +646,23 @@ function InitiativeCard({init,onDelete,onUpdate,onDragStart,onDragEnd,blockNames
               </div>
               <div>
                 <div style={{fontSize:10,color:"#999",marginBottom:4}}>Linked Block</div>
-                <select className="field" value={draft.blockName||""} onChange={e=>setDraft(p=>({...p,blockName:e.target.value||null}))}>
+                <select className="field" value={draft.blockName||""} onChange={e=>{
+                  const bName=e.target.value||null;
+                  // Auto-select category based on which pyramid layer the block belongs to
+                  let autoCat=null;
+                  if(bName&&blockNamesByLayer){
+                    for(const layer of ["WIN","DIFF","COMPETE"]){
+                      if((blockNamesByLayer[layer]||[]).includes(bName)){autoCat=layer;break;}
+                    }
+                  }
+                  setDraft(p=>({...p,blockName:bName,...(autoCat?{category:autoCat}:{})}));
+                }}>
                   <option value="">— None —</option>
-                  {(blockNames||[]).map(b=><option key={b} value={b}>{b}</option>)}
+                  {["WIN","DIFF","COMPETE","FOUNDATION"].map(layer=>{
+                    const lb=(blockNames||[]).filter(b=>(blockNamesByLayer||{})[layer]?.includes(b));
+                    if(!lb.length) return null;
+                    return <optgroup key={layer} label={layer}>{lb.map(b=><option key={b} value={b}>{b}</option>)}</optgroup>;
+                  })}
                 </select>
               </div>
             </div>
@@ -709,6 +791,14 @@ function InitiativePanel({initiatives,onAdd,onDelete,onUpdate,onDragStart,onDrag
   const writeBackTimerRef=useRef(null);
   const fileRef=useRef(null);
   const blockNames=useMemo(()=>getAllBlockNames(pyramid),[pyramid]);
+  const blockNamesByLayer=useMemo(()=>{
+    if(!pyramid) return {};
+    const result={};
+    for(const layer of ["WIN","DIFF","COMPETE","FOUNDATION"]){
+      result[layer]=(pyramid.layers[layer]||[]).filter(b=>b.name&&b.name!=="Block Name").map(b=>b.name);
+    }
+    return result;
+  },[pyramid]);
 
   const showToastMsg=(msg,err)=>{setToast({msg,err});setTimeout(()=>setToast(null),4000);};
 
@@ -910,7 +1000,11 @@ function InitiativePanel({initiatives,onAdd,onDelete,onUpdate,onDragStart,onDrag
         {blockNames.length>0&&(
           <select className="field" value={form.blockName} onChange={e=>setForm(p=>({...p,blockName:e.target.value}))} style={{marginBottom:6}}>
             <option value="">Link to block…</option>
-            {blockNames.map(b=><option key={b} value={b}>{b}</option>)}
+            {["WIN","DIFF","COMPETE","FOUNDATION"].map(layer=>{
+              const lb=(blockNamesByLayer[layer]||[]);
+              if(!lb.length) return null;
+              return <optgroup key={layer} label={layer}>{lb.map(b=><option key={b} value={b}>{b}</option>)}</optgroup>;
+            })}
           </select>
         )}
         <div style={{display:"flex",gap:5,marginBottom:8}}>
@@ -973,7 +1067,7 @@ function InitiativePanel({initiatives,onAdd,onDelete,onUpdate,onDragStart,onDrag
       </div>
       {/* List */}
       <div style={{flex:1,overflowY:"auto",padding:"8px 10px",display:"flex",flexDirection:"column",gap:5}}>
-        {filtered.length===0?(<div style={{textAlign:"center",padding:"40px 20px",color:"#bbb"}}><div style={{fontSize:28,marginBottom:8}}>🎯</div><div style={{fontSize:12,fontWeight:500}}>No initiatives yet.</div><div style={{fontSize:11,marginTop:4}}>Add one above or drag to the map.</div></div>):(filtered.map(init=>(<InitiativeCard key={init.id} init={init} onDelete={onDelete} onUpdate={onUpdate} onDragStart={onDragStart} onDragEnd={onDragEnd} blockNames={blockNames}/>)))}
+        {filtered.length===0?(<div style={{textAlign:"center",padding:"40px 20px",color:"#bbb"}}><div style={{fontSize:28,marginBottom:8}}>🎯</div><div style={{fontSize:12,fontWeight:500}}>No initiatives yet.</div><div style={{fontSize:11,marginTop:4}}>Add one above or drag to the map.</div></div>):(filtered.map(init=>(<InitiativeCard key={init.id} init={init} onDelete={onDelete} onUpdate={onUpdate} onDragStart={onDragStart} onDragEnd={onDragEnd} blockNames={blockNames} blockNamesByLayer={blockNamesByLayer}/>)))}
       </div>
     </div>
   );
@@ -983,13 +1077,29 @@ function InitiativePanel({initiatives,onAdd,onDelete,onUpdate,onDragStart,onDrag
 // COMPETITIVE STRATEGY DASHBOARD
 // ══════════════════════════════════════════════════════════════════════════
 
-function EditableText({value,onChange,style,placeholder}) {
+function EditableText({value,onChange,style,placeholder,multiline}) {
   const [editing,setEditing]=useState(false);
   const [val,setVal]=useState(value);
   useEffect(()=>setVal(value),[value]);
   const commit=()=>{onChange(val||"");setEditing(false);};
-  if(editing) return <input autoFocus value={val} onChange={e=>setVal(e.target.value)} onBlur={commit} onKeyDown={e=>{if(e.key==="Enter")commit();if(e.key==="Escape"){setVal(value);setEditing(false);}}} style={{...style,border:"none",borderBottom:"1.5px solid #FF0983",outline:"none",background:"transparent",width:"100%",padding:"1px 0"}}/>;
-  return <div onClick={()=>setEditing(true)} title="Click to edit" style={{...style,cursor:"text",minHeight:20,borderBottom:"1.5px solid transparent",paddingBottom:1}} onMouseEnter={e=>e.currentTarget.style.borderBottomColor="#e0e0e0"} onMouseLeave={e=>e.currentTarget.style.borderBottomColor="transparent"}>{value||<span style={{color:"#bbb"}}>{placeholder}</span>}</div>;
+  const handleKeyDown=e=>{
+    if(e.key==="Escape"){setVal(value);setEditing(false);return;}
+    if(!multiline&&e.key==="Enter"){commit();return;}
+    if(multiline&&e.key==="Enter"){
+      const lines=(val||"").split("\n");
+      if(lines.length>=3) e.preventDefault();
+    }
+  };
+  const handleMultiChange=e=>{
+    const lines=e.target.value.split("\n");
+    if(lines.length>3) return;
+    setVal(e.target.value);
+  };
+  if(editing){
+    if(multiline) return <textarea autoFocus value={val} onChange={handleMultiChange} onBlur={commit} onKeyDown={handleKeyDown} rows={Math.min(3,Math.max(1,(val||"").split("\n").length))} style={{...style,border:"none",borderBottom:"1.5px solid #FF0983",outline:"none",background:"transparent",width:"100%",padding:"1px 0",resize:"none",fontFamily:"inherit",overflow:"hidden",display:"block"}}/>;
+    return <input autoFocus value={val} onChange={e=>setVal(e.target.value)} onBlur={commit} onKeyDown={handleKeyDown} style={{...style,border:"none",borderBottom:"1.5px solid #FF0983",outline:"none",background:"transparent",width:"100%",padding:"1px 0"}}/>;
+  }
+  return <div onClick={()=>setEditing(true)} title="Click to edit" style={{...style,cursor:"text",minHeight:20,borderBottom:"1.5px solid transparent",paddingBottom:1,whiteSpace:multiline?"pre-wrap":undefined}} onMouseEnter={e=>e.currentTarget.style.borderBottomColor="#e0e0e0"} onMouseLeave={e=>e.currentTarget.style.borderBottomColor="transparent"}>{value||<span style={{color:"#bbb"}}>{placeholder}</span>}</div>;
 }
 
 function LayerColorPicker({color,onChange}) {
@@ -1055,7 +1165,71 @@ function CompetitiveStrategyView({pyramid,onUpdatePyramid,initiatives=[],setting
   const updateBlock=(layer,id,changes)=>onUpdatePyramid({layers:{...layers,[layer]:layers[layer].map(b=>b.id===id?{...b,...changes}:b)}});
   const deleteBlock=(layer,id)=>onUpdatePyramid({layers:{...layers,[layer]:layers[layer].filter(b=>b.id!==id)}});
   const addBlock=layer=>onUpdatePyramid({layers:{...layers,[layer]:[...layers[layer],{id:genId(),name:"Block Name",description:"",ryg:null}]}});
+
+  // Move block between or within layers
+  const moveBlock=(srcLayer,blockId,dstLayer,nearestId,dropSide)=>{
+    const srcBlock=layers[srcLayer].find(b=>b.id===blockId);
+    if(!srcBlock) return;
+    let newLayers={...layers};
+    newLayers[srcLayer]=newLayers[srcLayer].filter(b=>b.id!==blockId);
+    const dstBlocks=[...newLayers[dstLayer]];
+    if(nearestId){
+      const idx=dstBlocks.findIndex(b=>b.id===nearestId);
+      const insertAt=idx>=0?(dropSide==="after"?idx+1:idx):dstBlocks.length;
+      dstBlocks.splice(insertAt,0,srcBlock);
+    } else {
+      dstBlocks.push(srcBlock);
+    }
+    newLayers[dstLayer]=dstBlocks;
+    // Clear rowAssignments for affected layers so auto-layout recalculates
+    const newRA={...(pyramid.rowAssignments||{})};
+    delete newRA[srcLayer]; delete newRA[dstLayer];
+    onUpdatePyramid({layers:newLayers,rowAssignments:newRA});
+  };
+
+  const mergeIntoRow=(srcLayer,blockId,dstLayer,targetRowIdx)=>{
+    // Move block and insert into a specific row in dstLayer's rowAssignments
+    const srcBlock=layers[srcLayer].find(b=>b.id===blockId);
+    if(!srcBlock) return;
+    let newLayers={...layers};
+    newLayers[srcLayer]=newLayers[srcLayer].filter(b=>b.id!==blockId);
+    newLayers[dstLayer]=[...newLayers[dstLayer]];
+    if(!newLayers[dstLayer].find(b=>b.id===blockId)) newLayers[dstLayer].push(srcBlock);
+    // Update rowAssignments
+    const newRA={...(pyramid.rowAssignments||{})};
+    // Init row assignments for dstLayer from current positions
+    const dstBlocksCurrent=layers[dstLayer];
+    const existingRA=newRA[dstLayer];
+    let dstRows;
+    if(existingRA){
+      dstRows=existingRA.map(r=>[...r]);
+    } else {
+      const layout=getLayerLayout(dstBlocksCurrent.length,dstLayer);
+      dstRows=[];
+      let total=0;
+      layout.rowCounts.forEach(cnt=>{
+        dstRows.push(dstBlocksCurrent.slice(total,total+cnt).map(b=>b.id));
+        total+=cnt;
+      });
+    }
+    // Remove blockId from any existing row
+    dstRows=dstRows.map(r=>r.filter(id=>id!==blockId)).filter(r=>r.length>0);
+    // Also remove from src rows if same layer
+    if(srcLayer===dstLayer){const newSrcRA=newRA[srcLayer];if(newSrcRA){newRA[srcLayer]=newSrcRA.map(r=>r.filter(id=>id!==blockId)).filter(r=>r.length>0);}}
+    // Insert into target row
+    const rowIdx=Math.min(targetRowIdx,dstRows.length-1);
+    if(rowIdx>=0&&dstRows[rowIdx]){dstRows[rowIdx]=[...dstRows[rowIdx],blockId];}
+    else{dstRows.push([blockId]);}
+    newRA[dstLayer]=dstRows;
+    // Also remove src from rowAssignments if cross-layer
+    if(srcLayer!==dstLayer) delete newRA[srcLayer];
+    onUpdatePyramid({layers:newLayers,rowAssignments:newRA});
+  };
+
   const [hoverLabel,setHoverLabel]=useState(null);
+  const [viewMode,setViewMode]=useState("layer"); // "layer" | "ryg"
+  const [blockDrag,setBlockDrag]=useState(null); // {layer,id,ghostX,ghostY,dropTarget}
+  const blockDragRef=useRef(null);
 
   // ── Cosmetic divider offsets — purely visual, don't affect pyramid geometry ─
   // dividerOffsets: { WIN_DIFF: <px from top of wrapper>, DIFF_COMPETE: <px> }
@@ -1099,6 +1273,7 @@ function CompetitiveStrategyView({pyramid,onUpdatePyramid,initiatives=[],setting
 
   const didPan=useRef(false);
   const handleOuterDown=useCallback(e=>{
+    if(blockDragRef.current) return; // block drag in progress
     if(e.button===1||e.button===0){
       e.preventDefault();
       isPanning.current=true;
@@ -1135,24 +1310,49 @@ function CompetitiveStrategyView({pyramid,onUpdatePyramid,initiatives=[],setting
   // For text wrapping: at each text row's y, compute the actual visible x width
   // clamped by the triangle edges, and wrap to fit.
 
-  const W=1000, MID=500;
   const GAP=5;         // uniform gap: between blocks AND between layers
   const BASE_ROW_H=80; // default height per block row
   const MIN_LINE_H_ROW=14; // each additional line adds this much height
   const MIN_LAYER_H=70;
-  const FS=11;         // font size for block text
+  const FS=10;         // font size for block text
   const LINE_H=14;     // line height in pixels
-  const TEXT_PAD=8;    // horizontal padding inside block for text
+  const TEXT_PAD=12;   // horizontal padding inside block for text
 
-  // Compute layout: distribute blocks bottom-heavy (more on bottom rows).
-  // cols = max blocks in any single row = ceil(n / rows)
-  // rows = ceil(n / maxCols) where maxCols makes a nice layout
-  // Rule: rows = ceil(sqrt(n)), cols = ceil(n/rows)
-  // Then we assign blocks to rows filling BOTTOM rows first (more on bottom).
+  // W auto-widens if the apex block's text would overflow the narrow triangle tip.
+  // Formula: apex midY / BASE_Y ≈ 0.5 / totalRows (all rows equal BASE_ROW_H),
+  // so apex visible width ≈ W * 0.5/totalRows. We scale W until the longest
+  // wrapped line fits, capped at BASE_W + 100px.
+  const W = useMemo(()=>{
+    const BASE_W = 900;
+    const apexBlock = (layers.WIN||[])[0];
+    if(!apexBlock?.name || apexBlock.name==="Block Name") return BASE_W;
+    const nWin=(layers.WIN||[]).length, nDiff=(layers.DIFF||[]).length, nCompete=(layers.COMPETE||[]).length;
+    const totalRows = winLayerLayout(nWin).rows + diffLayerLayout(nDiff).rows + competeLayerLayout(nCompete).rows;
+    const apexMidYFrac = 0.5 / Math.max(1, totalRows);
+    const apexVisW = BASE_W * apexMidYFrac;
+    // Wrap text at current apex width, find the longest resulting line
+    const charsPerLine = Math.max(3, Math.floor((apexVisW - 2*TEXT_PAD) / (FS * 0.58)));
+    const words = (apexBlock.name||"").replace(/\n/g," ").split(/\s+/).filter(Boolean);
+    const wrappedLines = []; let cur = "";
+    for(const w of words){
+      if(!cur){ cur=w; }
+      else if(cur.length+1+w.length<=charsPerLine){ cur+=" "+w; }
+      else{ wrappedLines.push(cur); cur=w; }
+    }
+    if(cur) wrappedLines.push(cur);
+    const maxLen = Math.max(1, ...wrappedLines.map(l=>l.length));
+    const neededVisW = maxLen * FS * 0.62 + 2*TEXT_PAD;
+    if(neededVisW <= apexVisW) return BASE_W;
+    const scale = neededVisW / apexVisW;
+    return Math.max(BASE_W, Math.min(BASE_W + 100, Math.ceil(BASE_W * scale / 10) * 10));
+  }, [JSON.stringify({nW:(layers.WIN||[]).length, name:(layers.WIN||[])[0]?.name, nD:(layers.DIFF||[]).length, nC:(layers.COMPETE||[]).length})]);
+  const MID = W/2;
+
+  // Generic sqrt-based layout (fallback / FOUNDATION)
   function layerLayout(n) {
     if(n===0) return {cols:1,rows:1,rowCounts:[]};
     if(n===1) return {cols:1,rows:1,rowCounts:[1]};
-    if(n===3) return {cols:3,rows:1,rowCounts:[3]};
+    if(n===2) return {cols:2,rows:1,rowCounts:[2]};
     const rows=Math.ceil(Math.sqrt(n));
     const cols=Math.ceil(n/rows);
     const base=Math.floor(n/rows);
@@ -1163,6 +1363,30 @@ function CompetitiveStrategyView({pyramid,onUpdatePyramid,initiatives=[],setting
       rowCounts.push(isExtra?base+1:base);
     }
     return {cols,rows,rowCounts};
+  }
+
+  // DIFF layer: 3 blocks → 1 top + 2 bottom; otherwise balanced
+  function diffLayerLayout(n) {
+    if(n===0) return {cols:1,rows:1,rowCounts:[]};
+    if(n===1) return {cols:1,rows:1,rowCounts:[1]};
+    if(n===2) return {cols:2,rows:1,rowCounts:[2]};
+    if(n===3) return {cols:2,rows:2,rowCounts:[1,2]}; // 1 on top, 2 on bottom
+    if(n===4) return {cols:2,rows:2,rowCounts:[2,2]};
+    if(n===5) return {cols:3,rows:2,rowCounts:[2,3]};
+    if(n===6) return {cols:3,rows:2,rowCounts:[3,3]};
+    return layerLayout(n);
+  }
+
+  // COMPETE layer: 3 → one row; 6 → 3+3; never more than 2 rows
+  function competeLayerLayout(n) {
+    if(n===0) return {cols:1,rows:1,rowCounts:[]};
+    if(n===1) return {cols:1,rows:1,rowCounts:[1]};
+    if(n===2) return {cols:2,rows:1,rowCounts:[2]};
+    if(n===3) return {cols:3,rows:1,rowCounts:[3]};
+    // 4+ blocks: always exactly 2 rows; top row gets floor(n/2), bottom gets ceil(n/2)
+    const topRow=Math.floor(n/2);
+    const botRow=n-topRow;
+    return {cols:Math.max(topRow,botRow),rows:2,rowCounts:[topRow,botRow]};
   }
 
   // WIN layer: top row always = 1 single block (apex), rest distributed below
@@ -1187,7 +1411,10 @@ function CompetitiveStrategyView({pyramid,onUpdatePyramid,initiatives=[],setting
   }
 
   function getLayerLayout(n, layer) {
-    return layer==="WIN" ? winLayerLayout(n) : layerLayout(n);
+    if(layer==="WIN") return winLayerLayout(n);
+    if(layer==="DIFF") return diffLayerLayout(n);
+    if(layer==="COMPETE") return competeLayerLayout(n);
+    return layerLayout(n);
   }
 
   // Compute dynamic BASE_Y: the triangle height = total of all 3 triangle layers
@@ -1207,11 +1434,15 @@ function CompetitiveStrategyView({pyramid,onUpdatePyramid,initiatives=[],setting
   }
 
   function computeLayerHeights(layerBlocks) {
+    const rowAssignments = pyramid.rowAssignments||{};
     const h={};
     for(const layer of ["WIN","DIFF","COMPETE"]) {
       const blocks=(layerBlocks[layer]||[]);
       const n=blocks.length;
-      const {rows,rowCounts,cols}=getLayerLayout(n||1, layer);
+      const asgn=rowAssignments[layer];
+      const {rows,rowCounts,cols}=asgn
+        ?{rows:asgn.length,cols:Math.max(1,...asgn.map(r=>r.length)),rowCounts:asgn.map(r=>r.length)}
+        :getLayerLayout(n||1, layer);
       const approxBlockW = Math.max(40, (W / Math.max(cols,1)) * 0.75);
       let maxLines = 1;
       blocks.forEach(b => {
@@ -1225,7 +1456,7 @@ function CompetitiveStrategyView({pyramid,onUpdatePyramid,initiatives=[],setting
     return h;
   }
 
-  const layerH=useMemo(()=>computeLayerHeights(layers),[JSON.stringify(layers)]);
+  const layerH=useMemo(()=>computeLayerHeights(layers),[JSON.stringify(layers),W]);
 
   // ResizeObserver to track SVG container rendered pixel height for divider positioning
   useEffect(()=>{
@@ -1261,6 +1492,19 @@ function CompetitiveStrategyView({pyramid,onUpdatePyramid,initiatives=[],setting
   const FOUND_Y0=useMemo(()=>BASE_Y+GAP,[BASE_Y]);
   const FOUND_Y1=useMemo(()=>FOUND_Y0+FOUND_H,[FOUND_Y0]);
   const SVG_H=useMemo(()=>showFoundation?FOUND_Y1+GAP:BASE_Y+GAP,[FOUND_Y1,BASE_Y,showFoundation]);
+
+  const fitToView=useCallback(()=>{
+    const outer=outerRef.current; if(!outer||!SVG_H) return;
+    const ow=outer.clientWidth, oh=outer.clientHeight;
+    const labelPanelW=200, leftPad=50, rightPad=50, topPad=50, botPad=50, gap=32;
+    const svgContainerW=Math.max(1,ow-leftPad-labelPanelW-gap-rightPad);
+    const svgNatH=svgContainerW*SVG_H/W;
+    const contentH=svgNatH+topPad+botPad;
+    const z=Math.min(1,Math.max(0.25,oh/contentH));
+    setZoom(z); setPanX(0); setPanY(Math.max(0,(oh-contentH*z)/2));
+  },[SVG_H,W]);
+
+  useEffect(()=>{ if(svgPixelH>0) fitToView(); },[svgPixelH,W]);
 
   // ── Block layout within a layer ──────────────────────────────────────
   // Blocks are arranged in a grid of (cols × rows).
@@ -1310,26 +1554,28 @@ function CompetitiveStrategyView({pyramid,onUpdatePyramid,initiatives=[],setting
   //   middle → center (textAnchor="middle"), text at visible center x
   function wrapAndAlign(text, bx0, bx1, by0, by1, col, nThisRow) {
     const midY=(by0+by1)/2;
-    const topY=by0+Math.min(LINE_H, (by1-by0)*0.3);
 
-    // Visible x bounds at midY and topY (clamped by triangle edges)
+    // Use midY only for safe bounds — avoids over-clipping the narrow apex block
     const visLeft=y=>Math.max(bx0, triLeft(y));
     const visRight=y=>Math.min(bx1, triRight(y));
-    // Safe width = narrowest visible region between top and mid of block
-    const safeVisLeft=Math.max(visLeft(midY), visLeft(topY));
-    const safeVisRight=Math.min(visRight(midY), visRight(topY));
+    const safeVisLeft=visLeft(midY);
+    const safeVisRight=visRight(midY);
     const safeWidth=Math.max(10, safeVisRight-safeVisLeft-2*TEXT_PAD);
     const charsPerLine=Math.max(3, Math.floor(safeWidth/(FS*0.58)));
 
-    const words=(text||"").split(" ");
-    const lines=[]; let cur="";
-    for(const w of words){
-      if(!cur){cur=w;}
-      else if(cur.length+1+w.length<=charsPerLine){cur+=" "+w;}
-      else{lines.push(cur);cur=w;}
+    const segments=(text||"").split("\n");
+    const ls=[];
+    for(const seg of segments){
+      const words=seg.split(" ");
+      let cur="";
+      for(const w of words){
+        if(!cur){cur=w;}
+        else if(cur.length+1+w.length<=charsPerLine){cur+=" "+w;}
+        else{ls.push(cur);cur=w;}
+      }
+      ls.push(cur);
     }
-    if(cur)lines.push(cur);
-    const ls=lines.length?lines:[""];
+    if(!ls.length) ls.push("");
 
     // Always center text within the visible (clipped) area of the block
     const textX=(safeVisLeft+safeVisRight)/2;
@@ -1344,6 +1590,42 @@ function CompetitiveStrategyView({pyramid,onUpdatePyramid,initiatives=[],setting
     const bx0=fw*i+GAP/2, bx1=fw*(i+1)-GAP/2;
     const by0=FOUND_Y0+GAP/2, by1=FOUND_Y1-GAP/2;
     return {bx0,bx1,by0,by1,cx:(bx0+bx1)/2,cy:(by0+by1)/2};
+  }
+
+  // Returns {[blockId]: {bx0,bx1,by0,by1,cx,cy,row,col,nThisRow}} using rowAssignments if present
+  function getBlockPositions(layer, blocks, y0, y1) {
+    const asgn=(pyramid.rowAssignments||{})[layer];
+    if(asgn&&asgn.length>0) {
+      const rows=asgn.length;
+      const rowH=(y1-y0)/rows;
+      const pos={};
+      asgn.forEach((rowIds,rowIdx)=>{
+        const nThisRow=rowIds.length;
+        const rowTopY=y0+rowIdx*rowH, rowBotY=y0+(rowIdx+1)*rowH;
+        const lBot=triLeft(rowBotY), rBot=triRight(rowBotY);
+        const wBot=rBot-lBot;
+        rowIds.forEach((id,colIdx)=>{
+          const colW=wBot/Math.max(1,nThisRow);
+          const bx0=lBot+colIdx*colW+(colIdx===0?GAP:GAP/2);
+          const bx1=lBot+(colIdx+1)*colW-(colIdx===nThisRow-1?GAP:GAP/2);
+          const by0_=rowTopY+GAP/2, by1_=rowBotY-GAP/2;
+          pos[id]={bx0,bx1,by0:by0_,by1:by1_,cx:(bx0+bx1)/2,cy:(by0_+by1_)/2,row:rowIdx,col:colIdx,nThisRow,rows,rowH,isLastRow:rowIdx===rows-1};
+        });
+      });
+      return pos;
+    }
+    const pos={};
+    blocks.forEach((b,i)=>{
+      const c=blockCell(i,blocks.length,y0,y1,layer);
+      pos[b.id]={...c};
+    });
+    return pos;
+  }
+
+  function getFoundPositions(blocks) {
+    const pos={};
+    blocks.forEach((b,i)=>{const c=foundCell(i,blocks.length);pos[b.id]={...c};});
+    return pos;
   }
 
   // Active block for popup/editing
@@ -1405,42 +1687,110 @@ function CompetitiveStrategyView({pyramid,onUpdatePyramid,initiatives=[],setting
         <defs><clipPath id={clipId}><polygon points={clipPts}/></clipPath></defs>
         {/* Background fill for empty layer */}
         {n===0&&<polygon points={clipPts} fill={lc}/>}
-        {blocks.map((block,i)=>{
-          const {bx0,bx1,by0,by1,cx,cy,col,nThisRow}=blockCell(i,n,y0,y1,layer);
+        {(()=>{
+          const positions=getBlockPositions(layer,blocks,y0,y1);
+          return blocks.map((block)=>{
+          const pos=positions[block.id]; if(!pos) return null;
+          const {bx0,bx1,by0,by1,cx,cy,col,nThisRow}=pos;
           const isHov=hoverBlock?.layer===layer&&hoverBlock?.id===block.id;
           const isActive=activeBlock?.layer===layer&&activeBlock?.id===block.id;
           const isEdit=editingBlock?.layer===layer&&editingBlock?.id===block.id;
-          const fill=isHov||isActive?darken(lc,0.10):lc;
-          const {lines,textX,anchor}=wrapAndAlign(block.name,bx0,bx1,by0,by1,col,nThisRow);
+          const isDragging=blockDrag?.layer===layer&&blockDrag?.id===block.id;
+          const baseFill=viewMode==="ryg"?(block.ryg?PYRAMID_RYG[block.ryg]:PYRAMID_RYG._none):lc;
+          const fill=isDragging?"rgba(0,0,0,0.15)":isHov||isActive?darken(baseFill,0.10):baseFill;
+          const textColor=(()=>{try{const h=fill.replace('#','');const r=parseInt(h.slice(0,2),16),g=parseInt(h.slice(2,4),16),b=parseInt(h.slice(4,6),16);return(0.299*r+0.587*g+0.114*b)>160?"#222":"#fff";}catch{return"#fff";}})();
+          const {lines,textX,anchor}=wrapAndAlign(block.name,bx0,bx1,by0,by1,col||0,nThisRow||1);
           const totalTextH=(lines.length-1)*LINE_H;
           const textY=cy-totalTextH/2;
           return (
             <g key={block.id}
-              onMouseEnter={()=>setHoverBlock({layer,id:block.id})}
+              onMouseEnter={()=>!blockDrag&&setHoverBlock({layer,id:block.id})}
               onMouseLeave={()=>setHoverBlock(null)}
-              style={{cursor:"pointer"}}>
+              style={{cursor:blockDrag?"grabbing":"pointer"}}>
               <rect x={bx0} y={by0} width={bx1-bx0} height={by1-by0}
                 fill={fill} clipPath={`url(#${clipId})`}/>
-              {block.ryg&&(
-                <circle cx={Math.min(bx1-6,Math.min(bx1,triRight(by0+8))-6)} cy={by0+8} r={4}
-                  fill={RYG_COLORS[block.ryg]} clipPath={`url(#${clipId})`}
-                  style={{pointerEvents:"none"}}/>
-              )}
-              {!isEdit&&lines.map((line,li)=>(
+              {!isEdit&&!isDragging&&lines.map((line,li)=>(
                 <text key={li} x={textX} y={textY+li*LINE_H}
                   textAnchor={anchor} dominantBaseline="middle"
                   clipPath={`url(#${clipId})`}
-                  style={{fontSize:FS,fontWeight:600,fill:"#fff",pointerEvents:"none",userSelect:"none"}}>
+                  style={{fontSize:FS,fontWeight:600,fill:textColor,pointerEvents:"none",userSelect:"none"}}>
                   {line}
                 </text>
               ))}
               <rect x={bx0} y={by0} width={bx1-bx0} height={by1-by0} fill="transparent"
                 clipPath={`url(#${clipId})`}
-                onClick={e=>{e.stopPropagation();if(didPan.current)return;if(editingBlock?.layer===layer&&editingBlock?.id===block.id){commitEdit();return;}setActiveBlock(prev=>prev?.layer===layer&&prev?.id===block.id?null:{layer,id:block.id});}}
+                onMouseDown={e=>{
+                  if(e.button!==0) return;
+                  e.stopPropagation(); e.preventDefault();
+                  const sx=e.clientX,sy=e.clientY;
+                  let dragging=false;
+                  const onMove=me=>{
+                    const dx=me.clientX-sx,dy=me.clientY-sy;
+                    if(!dragging&&Math.sqrt(dx*dx+dy*dy)>6){
+                      dragging=true;
+                      blockDragRef.current={layer,id:block.id};
+                      setBlockDrag({layer,id:block.id,ghostX:me.clientX,ghostY:me.clientY,dropTarget:null,name:block.name});
+                    }
+                    if(dragging){
+                      const svgEl=svgDivRef.current?.querySelector('svg');
+                      let dropTarget=null;
+                      if(svgEl){
+                        const r=svgEl.getBoundingClientRect();
+                        const vx=(me.clientX-r.left)*W/r.width;
+                        const vy=(me.clientY-r.top)*SVG_H/r.height;
+                        for(const tl of ['WIN','DIFF','COMPETE']){
+                          const {y0:ty0,y1:ty1}=layerY[tl];
+                          if(vy>=ty0-10&&vy<=ty1+10){
+                            // find nearest block
+                            const tblocks=layers[tl]||[];
+                            const tpos=getBlockPositions(tl,tblocks,ty0,ty1);
+                            let nearest=null,minD=Infinity;
+                            tblocks.forEach(tb=>{const p=tpos[tb.id];if(!p)return;const d=Math.abs(p.cx-vx)+Math.abs(p.cy-vy);if(d<minD){minD=d;nearest={id:tb.id,cx:p.cx,row:p.row};}});
+                            dropTarget={layer:tl,nearestId:nearest?.id,side:nearest&&vx>nearest.cx?"after":"before",row:nearest?.row??0};
+                            break;
+                          }
+                        }
+                        if(!dropTarget&&showFoundation&&vy>=FOUND_Y0-10&&vy<=FOUND_Y1+10){
+                          const tblocks=layers['FOUNDATION']||[];
+                          let nearest=null,minD=Infinity;
+                          tblocks.forEach((tb,ti)=>{const p=foundCell(ti,tblocks.length);const d=Math.abs(p.cx-vx);if(d<minD){minD=d;nearest={id:tb.id,cx:p.cx};}});
+                          dropTarget={layer:'FOUNDATION',nearestId:nearest?.id,side:nearest&&vx>nearest.cx?"after":"before",row:0};
+                        }
+                      }
+                      blockDragRef.current={...blockDragRef.current,dropTarget};
+                      setBlockDrag(prev=>({...prev,ghostX:me.clientX,ghostY:me.clientY,dropTarget}));
+                    }
+                  };
+                  const onUp=me=>{
+                    window.removeEventListener('mousemove',onMove);
+                    window.removeEventListener('mouseup',onUp);
+                    if(dragging&&blockDragRef.current?.dropTarget){
+                      const dt=blockDragRef.current.dropTarget;
+                      // Detect same-row drop: if drop layer==src layer and row matches, merge into row
+                      const sameLayer=dt.layer===layer;
+                      const sameRow=sameLayer&&dt.row===pos.row&&dt.nearestId!==block.id;
+                      if(sameRow&&dt.nearestId){
+                        mergeIntoRow(layer,block.id,dt.layer,dt.row);
+                      } else {
+                        moveBlock(layer,block.id,dt.layer,dt.nearestId,dt.side);
+                      }
+                    } else if(!dragging){
+                      if(editingBlock?.layer===layer&&editingBlock?.id===block.id){commitEdit();return;}
+                      setActiveBlock(prev=>prev?.layer===layer&&prev?.id===block.id?null:{layer,id:block.id});
+                    }
+                    blockDragRef.current=null;
+                    setBlockDrag(null);
+                    setHoverBlock(null);
+                  };
+                  window.addEventListener('mousemove',onMove);
+                  window.addEventListener('mouseup',onUp);
+                }}
+                onDoubleClick={e=>{e.stopPropagation();setActiveBlock(null);setEditingBlock({layer,id:block.id});setEditVal(block.name);}}
               />
             </g>
           );
-        })}
+          });
+        })()}
       </g>
     );
   }
@@ -1457,13 +1807,18 @@ function CompetitiveStrategyView({pyramid,onUpdatePyramid,initiatives=[],setting
           const isHov=hoverBlock?.layer==="FOUNDATION"&&hoverBlock?.id===block.id;
           const isActive=activeBlock?.layer==="FOUNDATION"&&activeBlock?.id===block.id;
           const isEdit=editingBlock?.layer==="FOUNDATION"&&editingBlock?.id===block.id;
-          const fill=isHov||isActive?darken(lc,0.10):lc;
+          const baseFill=viewMode==="ryg"?(block.ryg?PYRAMID_RYG[block.ryg]:PYRAMID_RYG._none):lc;
+          const fill=isHov||isActive?darken(baseFill,0.10):baseFill;
+          const textColor=(()=>{try{const h=fill.replace('#','');const r=parseInt(h.slice(0,2),16),g=parseInt(h.slice(2,4),16),b=parseInt(h.slice(4,6),16);return(0.299*r+0.587*g+0.114*b)>160?"#222":"#fff";}catch{return"#fff";}})();
           const bw=bx1-bx0-2*TEXT_PAD;
           const charsPerLine=Math.max(3,Math.floor(bw/(FS*0.58)));
-          const words=(block.name||"").split(" ");
-          const lines=[]; let cur="";
-          for(const w of words){ if(!cur){cur=w;}else if(cur.length+1+w.length<=charsPerLine){cur+=" "+w;}else{lines.push(cur);cur=w;} }
-          if(cur)lines.push(cur);
+          const lines=[];
+          for(const seg of (block.name||"").split("\n")){
+            const words=seg.split(" "); let cur="";
+            for(const w of words){if(!cur){cur=w;}else if(cur.length+1+w.length<=charsPerLine){cur+=" "+w;}else{lines.push(cur);cur=w;}}
+            lines.push(cur);
+          }
+          if(!lines.length) lines.push("");
           const ls=lines.length?lines:[""];
           const totalTextH=(ls.length-1)*LINE_H;
           const textY=cy-totalTextH/2;
@@ -1473,16 +1828,16 @@ function CompetitiveStrategyView({pyramid,onUpdatePyramid,initiatives=[],setting
               onMouseLeave={()=>setHoverBlock(null)}
               style={{cursor:"pointer"}}>
               <rect x={bx0} y={by0} width={bx1-bx0} height={by1-by0} fill={fill}/>
-              {block.ryg&&<circle cx={bx1-6} cy={by0+6} r={4} fill={RYG_COLORS[block.ryg]} style={{pointerEvents:"none"}}/>}
               {!isEdit&&ls.map((line,li)=>(
                 <text key={li} x={cx} y={textY+li*LINE_H}
                   textAnchor="middle" dominantBaseline="middle"
-                  style={{fontSize:FS,fontWeight:600,fill:"#fff",pointerEvents:"none",userSelect:"none"}}>
+                  style={{fontSize:FS,fontWeight:600,fill:textColor,pointerEvents:"none",userSelect:"none"}}>
                   {line}
                 </text>
               ))}
               <rect x={bx0} y={by0} width={bx1-bx0} height={by1-by0} fill="transparent"
                 onClick={e=>{e.stopPropagation();if(didPan.current)return;if(editingBlock?.layer==="FOUNDATION"&&editingBlock?.id===block.id){commitEdit();return;}setActiveBlock(prev=>prev?.layer==="FOUNDATION"&&prev?.id===block.id?null:{layer:"FOUNDATION",id:block.id});}}
+                onDoubleClick={e=>{e.stopPropagation();setActiveBlock(null);setEditingBlock({layer:"FOUNDATION",id:block.id});setEditVal(block.name);}}
               />
             </g>
           );
@@ -1505,6 +1860,24 @@ function CompetitiveStrategyView({pyramid,onUpdatePyramid,initiatives=[],setting
           ?<img src={settings.brandLogoUrl} alt="Brand" style={{height:32,objectFit:"contain",maxWidth:100}}/>
           :null}
         <span style={{fontSize:15,fontWeight:700,color:"#121212"}}>Competitive Strategy</span>
+        <div style={{flex:1}}/>
+        <button onClick={()=>{
+          const svgEl=svgDivRef.current?.querySelector('svg');
+          if(!svgEl) return;
+          const clone=svgEl.cloneNode(true);
+          clone.setAttribute('xmlns','http://www.w3.org/2000/svg');
+          const blob=new Blob([clone.outerHTML],{type:'image/svg+xml'});
+          const url=URL.createObjectURL(blob);
+          const a=document.createElement('a');a.href=url;a.download='strategy-pyramid.svg';a.click();URL.revokeObjectURL(url);
+        }} style={{display:"flex",alignItems:"center",gap:6,fontSize:11,fontWeight:600,padding:"5px 12px",borderRadius:7,border:"1px solid #e0e0e0",background:"#fff",color:"#555",cursor:"pointer",marginRight:6}}>
+          {IC.download} Export SVG
+        </button>
+        <button onClick={()=>setViewMode(v=>v==="layer"?"ryg":"layer")}
+          style={{display:"flex",alignItems:"center",gap:6,fontSize:11,fontWeight:600,padding:"5px 12px",borderRadius:7,border:"1px solid #e0e0e0",background:viewMode==="ryg"?"#121212":"#fff",color:viewMode==="ryg"?"#fff":"#555",cursor:"pointer",transition:"all .15s"}}
+          title="Toggle between layer colours and RYG colours">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="4"/></svg>
+          {viewMode==="layer"?"View by RYG":"View by Layer"}
+        </button>
       </div>
       {/* Scrollable/pannable outer */}
       <div ref={outerRef}
@@ -1526,28 +1899,34 @@ function CompetitiveStrategyView({pyramid,onUpdatePyramid,initiatives=[],setting
           onClick={()=>{setActiveBlock(null);if(editingBlock){commitEdit();}}}
         >
           {/* Outer content wrapper — position:relative for absolute dividers */}
-          <div style={{padding:"40px 30px 40px 60px",display:"flex",gap:48,alignItems:"flex-start",minWidth:900,position:"relative"}}>
+          <div style={{padding:"50px",display:"flex",gap:12,alignItems:"flex-start",position:"relative",minWidth:"max-content"}}>
             {(()=>{
               // Scale factor: SVG viewBox units → rendered CSS pixels
               const scale = svgPixelH > 0 ? svgPixelH / SVG_H : 1;
               // TOP_PAD = 40px outer padding at top of this div
               const TOP_PAD = 40;
 
-              // Default divider Y (px from top of outer div) = layer bottom in viewBox * scale + TOP_PAD
-              const defaultDividerY = key => {
+              // Divider offsets stored in viewBox units (screen-independent)
+              // so shared sessions render identically on any screen size.
+              const defaultDividerVB = key => {
                 const layer = key === "WIN_DIFF" ? "WIN" : key === "DIFF_COMPETE" ? "DIFF" : "COMPETE";
-                return layerY[layer].y1 * scale + TOP_PAD;
+                return layerY[layer].y1; // viewBox units
               };
-              const getDividerY = key =>
-                dividerOffsets[key] != null ? dividerOffsets[key] : defaultDividerY(key);
+              // getDividerY converts stored VB units → CSS px for rendering
+              const getDividerY = key => {
+                const vb = dividerOffsets[key] != null ? dividerOffsets[key] : defaultDividerVB(key);
+                return vb * scale + TOP_PAD;
+              };
 
               const handleDividerDown=(e,key)=>{
                 e.preventDefault(); e.stopPropagation();
-                dividerDragState.current={active:true,key,startY:e.clientY,startOffset:getDividerY(key)};
+                const startVB = dividerOffsets[key] != null ? dividerOffsets[key] : defaultDividerVB(key);
+                dividerDragState.current={active:true,key,startY:e.clientY,startVB};
                 const onMove=ev=>{
                   if(!dividerDragState.current.active) return;
                   const dy=ev.clientY-dividerDragState.current.startY;
-                  updateDividerOffset(dividerDragState.current.key, dividerDragState.current.startOffset+dy);
+                  // Convert screen-px delta to viewBox units before storing
+                  updateDividerOffset(dividerDragState.current.key, dividerDragState.current.startVB + (scale>0?dy/scale:0));
                 };
                 const onUp=()=>{
                   dividerDragState.current.active=false;
@@ -1578,7 +1957,7 @@ function CompetitiveStrategyView({pyramid,onUpdatePyramid,initiatives=[],setting
               })}
 
               {/* Left label panel */}
-              <div style={{width:200,flexShrink:0,position:"relative",zIndex:10}}>
+              <div style={{width:260,flexShrink:0,position:"relative",zIndex:10}}>
                 {["WIN","DIFF","COMPETE","FOUNDATION"].map((layer)=>{
                   if(layer==="FOUNDATION"&&!showFoundation) return null;
                   const isFoundation = layer==="FOUNDATION";
@@ -1587,16 +1966,18 @@ function CompetitiveStrategyView({pyramid,onUpdatePyramid,initiatives=[],setting
                     ? getDividerY("COMPETE_FOUNDATION") - TOP_PAD + 20
                     : getDividerY(lowerDivKey) - TOP_PAD - 20;
                   const transform = isFoundation ? undefined : "translateY(-100%)";
+                  // WIN and DIFF get the full 260px; COMPETE gets narrower to match pyramid width
+                  const panelW = layer==="WIN"||layer==="DIFF" ? 260 : 220;
                   const desc = layerDescriptions[layer]||"";
                   const showDesc = !isFoundation && (hoverLabel===layer || desc);
                   return(
-                    <div key={layer} style={{position:"absolute",top:topPx,left:0,width:200,transform}}
+                    <div key={layer} style={{position:"absolute",top:topPx,left:0,width:panelW,transform}}
                       onMouseEnter={()=>setHoverLabel(layer)} onMouseLeave={()=>setHoverLabel(null)}>
                       <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
                         <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.1em",color:"#999",textTransform:"uppercase"}}>{layer}</div>
                         <LayerColorPicker color={layerColors[layer]} onChange={c=>updateLayerColor(layer,c)}/>
                       </div>
-                      {!isFoundation&&<EditableText value={layerLabels[layer]||""} onChange={v=>updateLayerLabel(layer,v)} style={{fontSize:14,fontWeight:700,color:"#121212",lineHeight:1.35}} placeholder={layer==="WIN"?"Winning Dimension":layer==="DIFF"?"Differentiating Dimension":"Compete Dimension"}/>}
+                      {!isFoundation&&<EditableText value={layerLabels[layer]||""} onChange={v=>updateLayerLabel(layer,v)} style={{fontSize:13,fontWeight:700,color:"#121212",lineHeight:1.35}} placeholder={layer==="WIN"?"Winning Dimension":layer==="DIFF"?"Differentiating Dimension":"Compete Dimension"} multiline/>}
                       {/* Hover description */}
                       {showDesc&&(
                         <div style={{marginTop:5,opacity:hoverLabel===layer?1:0.6,transition:"opacity .15s"}}>
@@ -1628,6 +2009,15 @@ function CompetitiveStrategyView({pyramid,onUpdatePyramid,initiatives=[],setting
                     <svg viewBox={`0 0 ${W} ${SVG_H}`} style={{width:"100%",display:"block",overflow:"visible"}}>
                       {["WIN","DIFF","COMPETE"].map(layer=>renderTriLayer(layer,uid))}
                       {showFoundation&&renderFoundation()}
+                    {/* Drop zone highlight */}
+                    {blockDrag?.dropTarget&&(()=>{
+                      const dt=blockDrag.dropTarget;
+                      if(dt.layer==='FOUNDATION') return null;
+                      const {y0,y1}=layerY[dt.layer]||{};
+                      if(y0==null) return null;
+                      const lc=layerColors[dt.layer];
+                      return <rect x={triLeft(y0)} y={y0} width={triRight(y0)-triLeft(y0)} height={y1-y0} fill={lc} opacity={0.25} style={{pointerEvents:"none"}}/>;
+                    })()}
                     </svg>
 
                     {/* Add block buttons */}
@@ -1647,6 +2037,12 @@ function CompetitiveStrategyView({pyramid,onUpdatePyramid,initiatives=[],setting
                       {IC.plus}
                     </button>}
 
+                    {/* Drag ghost */}
+                    {blockDrag&&(
+                      <div style={{position:"fixed",left:blockDrag.ghostX+12,top:blockDrag.ghostY-10,pointerEvents:"none",zIndex:9999,background:"rgba(0,0,0,0.8)",color:"#fff",fontSize:10,fontWeight:600,padding:"4px 10px",borderRadius:6,boxShadow:"0 2px 8px rgba(0,0,0,0.3)",whiteSpace:"nowrap",maxWidth:160,overflow:"hidden",textOverflow:"ellipsis"}}>
+                        {blockDrag.name}
+                      </div>
+                    )}
                     {/* Hover toolbar — pencil / details / delete */}
                     {hoverBlock&&!editingBlock&&(()=>{
                       const {layer,id}=hoverBlock;
@@ -1656,27 +2052,30 @@ function CompetitiveStrategyView({pyramid,onUpdatePyramid,initiatives=[],setting
                       const i=blocks.findIndex(b=>b.id===id);
                       if(i<0) return null;
                       const block=blocks[i];
-                      let cx_pct,by0_pct;
+                      let cx_pct,cy_pct;
                       if(layer==="FOUNDATION"){
                         const c=foundCell(i,n);
-                        cx_pct=(c.cx/W)*100; by0_pct=(c.by0/SVG_H)*100;
+                        cx_pct=(c.cx/W)*100; cy_pct=(c.cy/SVG_H)*100;
                       } else {
                         const {y0,y1}=layerY[layer];
                         const c=blockCell(i,n,y0,y1,layer);
-                        cx_pct=(c.cx/W)*100; by0_pct=(c.by0/SVG_H)*100;
+                        cx_pct=(c.cx/W)*100; cy_pct=(c.cy/SVG_H)*100;
                       }
                       return(
-                        <div style={{position:"absolute",left:`${cx_pct}%`,top:`${by0_pct}%`,transform:"translate(-50%,4px)",zIndex:55,display:"flex",gap:3,pointerEvents:"auto"}}>
+                        <div
+                          onMouseEnter={()=>setHoverBlock({layer,id})}
+                          onMouseLeave={()=>setHoverBlock(null)}
+                          style={{position:"absolute",left:`${cx_pct}%`,top:`${cy_pct}%`,transform:"translate(-50%,-50%)",zIndex:55,display:"flex",gap:3,pointerEvents:"auto"}}>
                           <button title="Edit name" onClick={e=>{e.stopPropagation();setEditingBlock({layer,id});setEditVal(block.name);setActiveBlock(null);}}
-                            style={{width:22,height:22,borderRadius:5,background:"rgba(255,255,255,0.96)",border:"1px solid #e0e0e0",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 1px 4px rgba(0,0,0,0.12)",color:"#555"}}>
+                            style={{width:22,height:22,borderRadius:5,background:"rgba(255,255,255,0.92)",border:"1px solid #e0e0e0",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 1px 4px rgba(0,0,0,0.12)",color:"#555"}}>
                             {IC.pencil}
                           </button>
                           <button title="Details" onClick={e=>{e.stopPropagation();setActiveBlock(prev=>prev?.layer===layer&&prev?.id===id?null:{layer,id});}}
-                            style={{width:22,height:22,borderRadius:5,background:"rgba(255,255,255,0.96)",border:"1px solid #e0e0e0",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 1px 4px rgba(0,0,0,0.12)",fontSize:12,fontWeight:700,color:"#555",letterSpacing:1}}>
+                            style={{width:22,height:22,borderRadius:5,background:"rgba(255,255,255,0.92)",border:"1px solid #e0e0e0",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 1px 4px rgba(0,0,0,0.12)",fontSize:12,fontWeight:700,color:"#555",letterSpacing:1}}>
                             ···
                           </button>
                           <button title="Delete" onClick={e=>{e.stopPropagation();deleteBlock(layer,id);setHoverBlock(null);}}
-                            style={{width:22,height:22,borderRadius:5,background:"rgba(255,255,255,0.96)",border:"1px solid #fecaca",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 1px 4px rgba(0,0,0,0.12)",color:"#ef4444"}}>
+                            style={{width:22,height:22,borderRadius:5,background:"rgba(255,255,255,0.92)",border:"1px solid #fecaca",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 1px 4px rgba(0,0,0,0.12)",color:"#ef4444"}}>
                             {IC.trash}
                           </button>
                         </div>
@@ -1701,11 +2100,15 @@ function CompetitiveStrategyView({pyramid,onUpdatePyramid,initiatives=[],setting
                       }
                       return(
                         <div style={{position:"absolute",left:`${cx_pct}%`,top:`${cy_pct}%`,transform:"translate(-50%,-50%)",zIndex:50}}>
-                          <input autoFocus value={editVal} onChange={e=>setEditVal(e.target.value)}
+                          <textarea autoFocus value={editVal} onChange={e=>setEditVal(e.target.value)}
                             onBlur={commitEdit}
-                            onKeyDown={e=>{if(e.key==="Enter")commitEdit();if(e.key==="Escape")setEditingBlock(null);}}
+                            onKeyDown={e=>{
+                              if(e.key==="Escape"){e.preventDefault();setEditingBlock(null);}
+                              if(e.key==="Enter"&&(e.metaKey||e.ctrlKey)){e.preventDefault();commitEdit();}
+                            }}
                             onClick={e=>e.stopPropagation()}
-                            style={{background:"rgba(0,0,0,0.55)",border:"none",outline:"none",color:"#fff",textAlign:"center",fontSize:11,fontWeight:600,borderRadius:4,padding:"3px 8px",minWidth:80,maxWidth:140}}/>
+                            rows={Math.max(1,(editVal||"").split("\n").length)}
+                            style={{background:"rgba(0,0,0,0.55)",border:"none",outline:"none",color:"#fff",textAlign:"center",fontSize:11,fontWeight:600,borderRadius:4,padding:"4px 8px",minWidth:80,maxWidth:140,resize:"none",display:"block",lineHeight:1.4,fontFamily:"inherit"}}/>
                         </div>
                       );
                     })())}
@@ -1784,7 +2187,7 @@ function TabBar({tabs,activeTabId,onSelectTab,onDuplicateTab,onRenameTab,onDelet
 }
 
 // ── Top Bar (nav + session) ───────────────────────────────────────────────
-function TopBar({sessionId,activeView,onChangeView,onNew,saveStatus}) {
+function TopBar({sessionId,activeView,onChangeView,onNew,saveStatus,onManualSave}) {
   const [copied,setCopied]=useState(false);
   const [showModal,setShowModal]=useState(false);
   const [draft,setDraft]=useState("");
@@ -1831,6 +2234,10 @@ function TopBar({sessionId,activeView,onChangeView,onNew,saveStatus}) {
       <button className={`nav-tab${activeView==="map"?" active":""}`} onClick={()=>onChangeView("map")}>{IC.map} Momentum Map</button>
       <div style={{flex:1}}/>
       {saveStatus&&<span className={`save-indicator${saveStatus?" "+saveStatus:""}`}>{saveStatus==="saving"?"Saving…":saveStatus==="saved"?"Saved ✓":""}</span>}
+      <button onClick={onManualSave} style={{display:"flex",alignItems:"center",gap:5,fontSize:11,fontWeight:600,color:"#fff",background:"#121212",border:"none",borderRadius:6,padding:"4px 11px",cursor:"pointer",transition:"background .12s"}} onMouseEnter={e=>e.currentTarget.style.background="#333"} onMouseLeave={e=>e.currentTarget.style.background="#121212"} title="Save now and encode full state into the session link">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+        Save
+      </button>
       <span style={{color:"#aaa",fontSize:11}}>Session:</span>
       <span style={{fontFamily:"monospace",fontWeight:700,color:"#555",fontSize:11,letterSpacing:"0.05em"}}>{sessionId}</span>
       <button onClick={copy} style={{display:"flex",alignItems:"center",gap:4,fontSize:11,color:"#888",border:"1px solid #e0e0e0",borderRadius:6,padding:"3px 9px",background:"#fff",cursor:"pointer"}}
@@ -1867,7 +2274,18 @@ function MapView({tab,onUpdate,saveStatus}) {
 
   const addInitiative=initOrArray=>{const newInits=Array.isArray(initOrArray)?initOrArray:[initOrArray];onUpdate({initiatives:[...initiatives,...newInits]});};
   const deleteInitiative=id=>onUpdate({initiatives:initiatives.filter(i=>i.id!==id)});
-  const updateInitiative=(id,changes)=>onUpdate({initiatives:initiatives.map(i=>i.id===id?{...i,...changes}:i)});
+  const updateInitiative=(id,changes)=>{
+    // Auto-set category based on the linked block's pyramid layer
+    let extra={};
+    if('blockName' in changes && changes.blockName && pyramid?.layers){
+      for(const layer of ["WIN","DIFF","COMPETE"]){
+        if((pyramid.layers[layer]||[]).some(b=>b.name===changes.blockName)){
+          extra={category:layer}; break;
+        }
+      }
+    }
+    onUpdate({initiatives:initiatives.map(i=>i.id===id?{...i,...changes,...extra}:i)});
+  };
   const toggleField=key=>{if(key==="name")return;onUpdate({displayFields:displayFields.includes(key)?displayFields.filter(f=>f!==key):[...displayFields,key]});};
   return (
     <div style={{display:"flex",flex:1,minHeight:0,overflow:"hidden"}}>
@@ -1909,33 +2327,39 @@ function App() {
   // Load state keyed by sessionId
   useEffect(()=>{
     if(!sessionId) return;
-    fetch(`${API}/api/state`,{headers:{"x-session-id":sessionId}})
+    // Abort + fallback to localStorage after 6 s — handles Render free-tier cold starts
+    const ctrl=new AbortController();
+    const timer=setTimeout(()=>ctrl.abort(),6000);
+    const applySource=(source)=>{
+      if(source&&source.tabs&&source.tabs.length>0){
+        const migrated=source.tabs.map(t=>({...makeDefaultTab(""),... t,pyramid:{...makeDefaultPyramid(),...(t.pyramid||{})},initiatives:(t.initiatives||[]).map(i=>({owner:null,progress:null,blockName:null,...i}))}));
+        setTabs(migrated);
+        setActiveTabId(source.activeTabId||migrated[0].id);
+        if(source.activeView) setActiveView(source.activeView);
+      } else {
+        const t=makeDefaultTab("Version 1");
+        setTabs([t]);setActiveTabId(t.id);
+      }
+      setLoaded(true);
+    };
+    // URL-encoded state takes priority (set by Save button)
+    const urlState=getEncodedStateFromHash();
+    if(urlState&&urlState.tabs&&urlState.tabs.length>0){
+      clearTimeout(timer); ctrl.abort();
+      applySource(urlState);
+      return;
+    }
+    fetch(`${API}/api/state`,{headers:{"x-session-id":sessionId},signal:ctrl.signal})
       .then(r=>r.ok?r.json():null)
       .then(data=>{
-        const source = (data&&data.tabs&&data.tabs.length>0) ? data : loadFromLocalStorage();
-        if(source&&source.tabs&&source.tabs.length>0){
-          const migrated=source.tabs.map(t=>({...makeDefaultTab(""),... t,pyramid:t.pyramid||makeDefaultPyramid(),initiatives:(t.initiatives||[]).map(i=>({owner:null,progress:null,blockName:null,...i}))}));
-          setTabs(migrated);
-          setActiveTabId(source.activeTabId||migrated[0].id);
-          if(source.activeView) setActiveView(source.activeView);
-        } else {
-          const t=makeDefaultTab("Version 1");
-          setTabs([t]);setActiveTabId(t.id);
-        }
-        setLoaded(true);
+        clearTimeout(timer);
+        applySource((data&&data.tabs&&data.tabs.length>0)?data:loadFromLocalStorage());
       })
       .catch(()=>{
-        const source=loadFromLocalStorage();
-        if(source&&source.tabs&&source.tabs.length>0){
-          const migrated=source.tabs.map(t=>({...makeDefaultTab(""),... t,pyramid:t.pyramid||makeDefaultPyramid(),initiatives:(t.initiatives||[]).map(i=>({owner:null,progress:null,blockName:null,...i}))}));
-          setTabs(migrated);
-          setActiveTabId(source.activeTabId||migrated[0].id);
-          if(source.activeView) setActiveView(source.activeView);
-        } else {
-          const t=makeDefaultTab("Version 1");setTabs([t]);setActiveTabId(t.id);
-        }
-        setLoaded(true);
+        clearTimeout(timer);
+        applySource(loadFromLocalStorage());
       });
+    return()=>{clearTimeout(timer);ctrl.abort();};
   },[sessionId]);
 
   // Debounced save keyed by sessionId
@@ -1955,6 +2379,17 @@ function App() {
 
   const activeTab=tabs.find(t=>t.id===activeTabId)||tabs[0];
   const updateActiveTab=changes=>setTabs(prev=>prev.map(t=>t.id===(activeTabId||tabs[0].id)?{...t,...changes}:t));
+
+  const handleManualSave=useCallback(()=>{
+    if(saveTimer.current) clearTimeout(saveTimer.current);
+    const stateData={tabs,activeTabId,activeView};
+    saveToLocalStorage(stateData);
+    setHashWithState(sessionId,stateData);
+    setSaveStatus("saving");
+    fetch(`${API}/api/state`,{method:"POST",headers:{"Content-Type":"application/json","x-session-id":sessionId},body:JSON.stringify({state:stateData})})
+      .then(()=>{setSaveStatus("saved");setTimeout(()=>setSaveStatus(""),2500);})
+      .catch(()=>{setSaveStatus("saved");setTimeout(()=>setSaveStatus(""),2500);});
+  },[tabs,activeTabId,activeView,sessionId]);
   const duplicateTab=()=>{
     if(tabs.length>=5) return;
     const src=tabs.find(t=>t.id===(activeTabId||tabs[0].id))||tabs[0];
@@ -1978,7 +2413,7 @@ function App() {
 
   return (
     <div style={{display:"flex",flexDirection:"column",height:"100vh",width:"100vw",overflow:"hidden",fontFamily:"'Switzer','Inter',sans-serif"}}>
-      <TopBar sessionId={sessionId} activeView={activeView} onChangeView={setActiveView} onNew={handleNewSession} saveStatus={saveStatus}/>
+      <TopBar sessionId={sessionId} activeView={activeView} onChangeView={setActiveView} onNew={handleNewSession} saveStatus={saveStatus} onManualSave={handleManualSave}/>
       <div style={{flex:1,minHeight:0,display:"flex",overflow:"hidden"}}>
         <div style={{flex:1,minWidth:0,display:"flex",flexDirection:"column",overflow:"hidden"}}>
           {activeView==="map"?(
