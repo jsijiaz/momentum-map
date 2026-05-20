@@ -378,12 +378,14 @@ function InitiativePin({init,xPct,dotYPct,displayFields,fontSize,labelWidth,minM
     setDotDragging(true); setPinned(false);
     // Cache bounding rect once — avoids layout thrash on every mousemove
     const rect=document.getElementById("momap-canvas-outer")?.getBoundingClientRect();
-    dotDragRef.current={y:e.clientY,x:e.clientX,origOffset:OFFY,rect};
-    let finalDate=null, finalOFFY=OFFY;
+    // origOffset is the current absolute Y% of the dot (already curve+offset resolved by parent)
+    dotDragRef.current={y:e.clientY,x:e.clientX,origOffset:dotYPct,rect};
+    let finalDate=null, finalAbsY=null;
+    let vertMoved=false;
     const up=()=>{
       // Commit to global state exactly once, on release
       if(finalDate&&validateDate(finalDate)) onUpdateDate(finalDate);
-      onUpdateOffsetY(parseFloat(finalOFFY.toFixed(2)));
+      if(finalAbsY!==null) onUpdateOffsetY(parseFloat(finalAbsY.toFixed(2)));
       setLiveXPct(null); setLiveOFFY(null); setDotDragging(false);
       window.removeEventListener("mouseup",up); window.removeEventListener("mousemove",mv);
     };
@@ -397,11 +399,15 @@ function InitiativePin({init,xPct,dotYPct,displayFields,fontSize,labelWidth,minM
       }
       // Divide Y delta by zoom: screen px → CSS px inside scaled canvas → % of container height
       const dyPx=me.clientY-dotDragRef.current.y;
-      finalOFFY=dotDragRef.current.origOffset+(r.height>0?((dyPx/zoom)/r.height)*100:0);
-      setLiveOFFY(finalOFFY);
+      // Only lock in a Y position if user actually moved vertically (>4px threshold)
+      if(Math.abs(dyPx)>4) vertMoved=true;
+      if(vertMoved){
+        finalAbsY=dotDragRef.current.origOffset+(r.height>0?((dyPx/zoom)/r.height)*100:0);
+        setLiveOFFY(finalAbsY);
+      }
     };
     window.addEventListener("mousemove",mv); window.addEventListener("mouseup",up);
-  },[minM,maxM,OFFY,zoom,onUpdateDate,onUpdateOffsetY]);
+  },[minM,maxM,dotYPct,zoom,onUpdateDate,onUpdateOffsetY]);
 
   const handleLblDown=useCallback(e=>{
     if(e.button!==0) return;
@@ -448,7 +454,7 @@ function InitiativePin({init,xPct,dotYPct,displayFields,fontSize,labelWidth,minM
   const zIdx=pinned||anyDrag?1000:hovered?200:10;
 
   return (
-    <div style={{position:"absolute",left:`${dispXPct}%`,top:`${dotYPct+dispOFFY}%`,transform:"translate(-50%,-50%)",zIndex:zIdx,userSelect:"none"}}>
+    <div style={{position:"absolute",left:`${dispXPct}%`,top:`${liveOFFY??dotYPct}%`,transform:"translate(-50%,-50%)",zIndex:zIdx,userSelect:"none"}}>
       <div style={{position:"absolute",bottom:`calc(100% + ${dispStem}px)`,left:"50%",transform:"translateX(-50%)",textAlign:"center",width:"max-content",maxWidth:dispLW,minWidth:40,boxSizing:"border-box",cursor:"ns-resize",pointerEvents:"auto",background:"#fff",borderRadius:3,padding:"2px 3px"}} onMouseDown={handleLblDown} onMouseEnter={()=>setHovered(true)} onMouseLeave={()=>{if(!dotDragging&&!lblDragging)setHovered(false);}} title="Drag up/down to adjust stem height">
         {/* right-edge width resize handle */}
         <div onMouseDown={handleWidthDown} title="Drag to resize label width" style={{position:"absolute",top:0,bottom:0,right:-4,width:8,cursor:"ew-resize",zIndex:5,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={e=>e.stopPropagation()}>
@@ -593,18 +599,20 @@ function MomentumCanvas({initiatives,horizons,settings,displayFields,fontSize,la
         {dropXFrac!=null&&draggingInit&&<div style={{position:"absolute",top:0,bottom:0,left:`${dropXFrac*100}%`,width:2,background:"#FF0983",opacity:0.6,pointerEvents:"none"}}/>}
         {initiatives.filter(i=>i.onMap&&!(settings?.hiddenLayers||[]).includes(i.category)).map(init=>{
           const xFrac=dateToX(init.date,minM,maxM);
-          // Dot always follows the curve
-          const dotY=curveYCanvas(xFrac,canvasHeight);
+          // Use saved absolute Y if user has repositioned; otherwise fall back to curve
+          const curveY=curveYCanvas(xFrac,canvasHeight);
+          const dotY=typeof init.offsetY==="number"?init.offsetY:curveY;
           const baseStem=typeof init.stemHeight==="number"?init.stemHeight:65;
           const autoExtra=(staggerOffsets[init.id]||0)*3;
           // In groupByLayer mode, compute stem so label lands in the category band
+          // Always use curveY (not absolute dotY) so stems measure from the curve
           const GROUP_Y={WIN:27,DIFF:46,COMPETE:65,OTHER:82};
           const stemOverride=settings?.groupByLayer
-            ?Math.max(10,Math.round((dotY-(GROUP_Y[init.category]??50))/100*canvasHeight))
+            ?Math.max(10,Math.round((curveY-(GROUP_Y[init.category]??50))/100*canvasHeight))
             :null;
           const finalStem=stemOverride!==null?stemOverride:Math.max(20,baseStem+autoExtra);
           return (
-            <InitiativePin key={init.id} init={{...init,stemHeight:finalStem}} xPct={Math.max(2,Math.min(98,xFrac*100))} dotYPct={dotY} displayFields={displayFields} fontSize={fontSize} labelWidth={labelWidth} minM={minM} maxM={maxM} zoom={zoom} onUpdateDate={date=>onUpdateInitiative(init.id,{date})} onUpdateOffsetY={o=>onUpdateInitiative(init.id,{offsetY:o})} onUpdateDateAndOffset={(date,offsetY)=>onUpdateInitiative(init.id,{date,offsetY})} onUpdateStemHeight={h=>onUpdateInitiative(init.id,{stemHeight:h})} onUpdateLabelWidth={w=>onUpdateInitiative(init.id,{labelWidth:w})} onRemoveFromMap={()=>onUpdateInitiative(init.id,{onMap:false,offsetY:0})} onUpdateProgress={p=>onUpdateInitiative(init.id,{progress:p})} onFocusInit={onFocusInit}/>
+            <InitiativePin key={init.id} init={{...init,stemHeight:finalStem}} xPct={Math.max(2,Math.min(98,xFrac*100))} dotYPct={dotY} displayFields={displayFields} fontSize={fontSize} labelWidth={labelWidth} minM={minM} maxM={maxM} zoom={zoom} onUpdateDate={date=>onUpdateInitiative(init.id,{date})} onUpdateOffsetY={o=>onUpdateInitiative(init.id,{offsetY:o})} onUpdateDateAndOffset={(date,offsetY)=>onUpdateInitiative(init.id,{date,offsetY})} onUpdateStemHeight={h=>onUpdateInitiative(init.id,{stemHeight:h})} onUpdateLabelWidth={w=>onUpdateInitiative(init.id,{labelWidth:w})} onRemoveFromMap={()=>onUpdateInitiative(init.id,{onMap:false,offsetY:null})} onUpdateProgress={p=>onUpdateInitiative(init.id,{progress:p})} onFocusInit={onFocusInit}/>
           );
         })}
       </div>
