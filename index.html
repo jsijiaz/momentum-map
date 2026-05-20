@@ -335,7 +335,7 @@ const DISPLAY_FIELDS=[
 ];
 
 // ── Initiative Pin ─────────────────────────────────────────────────────────
-function InitiativePin({init,xPct,dotYPct,displayFields,fontSize,labelWidth,minM,maxM,onUpdateDate,onUpdateOffsetY,onUpdateDateAndOffset,onUpdateStemHeight,onUpdateLabelWidth,onRemoveFromMap,onUpdateProgress,onFocusInit}) {
+function InitiativePin({init,xPct,dotYPct,displayFields,fontSize,labelWidth,minM,maxM,zoom=1,onUpdateDate,onUpdateOffsetY,onUpdateDateAndOffset,onUpdateStemHeight,onUpdateLabelWidth,onRemoveFromMap,onUpdateProgress,onFocusInit}) {
   const [pinned,setPinned]=useState(false);
   const [hovered,setHovered]=useState(false);
   const [dotDragging,setDotDragging]=useState(false);
@@ -389,15 +389,18 @@ function InitiativePin({init,xPct,dotYPct,displayFields,fontSize,labelWidth,minM
     const mv=me=>{
       const r=dotDragRef.current.rect; if(!r) return;
       if(minM!=null&&maxM!=null){
-        const xFrac=Math.max(0,Math.min(1,(me.clientX-r.left)/r.width));
+        // X is in canvas-content coordinates; the outer rect maps to contentW CSS px at scale(zoom)
+        const xFrac=Math.max(0,Math.min(1,(me.clientX-r.left)/(r.width)));
         finalDate=monthsToDate(Math.round(minM+xFrac*(maxM-minM)));
         setLiveXPct(Math.max(2,Math.min(98,xFrac*100)));
       }
-      finalOFFY=dotDragRef.current.origOffset+(r.height>0?((me.clientY-dotDragRef.current.y)/r.height)*100:0);
+      // Divide Y delta by zoom: screen px → CSS px inside scaled canvas → % of container height
+      const dyPx=me.clientY-dotDragRef.current.y;
+      finalOFFY=dotDragRef.current.origOffset+(r.height>0?((dyPx/zoom)/r.height)*100:0);
       setLiveOFFY(finalOFFY);
     };
     window.addEventListener("mousemove",mv); window.addEventListener("mouseup",up);
-  },[minM,maxM,OFFY,onUpdateDate,onUpdateOffsetY]);
+  },[minM,maxM,OFFY,zoom,onUpdateDate,onUpdateOffsetY]);
 
   const handleLblDown=useCallback(e=>{
     if(e.button!==0) return;
@@ -411,11 +414,13 @@ function InitiativePin({init,xPct,dotYPct,displayFields,fontSize,labelWidth,minM
       window.removeEventListener("mouseup",up); window.removeEventListener("mousemove",mv);
     };
     const mv=me=>{
-      finalStem=Math.max(20,Math.min(800,lblDragRef.current.origStem+(lblDragRef.current.y-me.clientY)));
+      // Divide by zoom: mouse moves in screen px, stem is CSS px inside scaled canvas
+      const delta=(lblDragRef.current.y-me.clientY)/zoom;
+      finalStem=Math.max(20,Math.min(800,lblDragRef.current.origStem+delta));
       setLiveStem(finalStem);
     };
     window.addEventListener("mousemove",mv); window.addEventListener("mouseup",up);
-  },[STEM,onUpdateStemHeight]);
+  },[STEM,zoom,onUpdateStemHeight]);
 
   const handleWidthDown=useCallback(e=>{
     if(e.button!==0) return;
@@ -429,11 +434,12 @@ function InitiativePin({init,xPct,dotYPct,displayFields,fontSize,labelWidth,minM
       window.removeEventListener("mouseup",up); window.removeEventListener("mousemove",mv);
     };
     const mv=me=>{
-      finalW=Math.max(80,Math.min(500,Math.round(wDragRef.current.origW+(me.clientX-wDragRef.current.x))));
+      const delta=(me.clientX-wDragRef.current.x)/zoom;
+      finalW=Math.max(80,Math.min(500,Math.round(wDragRef.current.origW+delta)));
       setLiveLW(finalW);
     };
     window.addEventListener("mousemove",mv); window.addEventListener("mouseup",up);
-  },[LWIDTH,onUpdateLabelWidth]);
+  },[LWIDTH,zoom,onUpdateLabelWidth]);
 
   const showTooltip=(pinned||hovered)&&!dotDragging&&!lblDragging&&!wDragging;
   const anyDrag=dotDragging||lblDragging||wDragging;
@@ -545,7 +551,9 @@ function MomentumCanvas({initiatives,horizons,settings,displayFields,fontSize,la
   const {minM,maxM}=getTimeline(horizons);
   const sorted=[...horizons].sort((a,b)=>a.order-b.order);
   const dividers=sorted.slice(0,-1).map(h=>(dateToMonths(horizonEndDate(h))-minM)/(maxM-minM));
-  const staggerOffsets=useMemo(()=>computeStaggerOffsets(initiatives,minM,maxM,canvasWidth),[initiatives,minM,maxM,canvasWidth]);
+  // At least 90 CSS px per month so the map breathes; the canvas is panned/zoomed to navigate
+  const contentW=Math.max(canvasWidth,Math.max(1800,(maxM-minM)*90));
+  const staggerOffsets=useMemo(()=>computeStaggerOffsets(initiatives,minM,maxM,contentW),[initiatives,minM,maxM,contentW]);
 
   return (
     <div id="momap-canvas-outer" ref={outerRef} style={{flex:1,position:"relative",overflowX:"hidden",overflowY:"visible",background:"#fff",minHeight:0}} onMouseDown={handleOuterMouseDown} onDragOver={e=>e.preventDefault()} onDragLeave={()=>setDropXFrac(null)} onDrop={e=>{e.preventDefault();setDropXFrac(null);if(!draggingInit)return;onDrop(draggingInit);}}>
@@ -556,8 +564,8 @@ function MomentumCanvas({initiatives,horizons,settings,displayFields,fontSize,la
         <div style={{fontSize:9,color:"#888",textAlign:"center",background:"rgba(255,255,255,0.7)",borderRadius:4,padding:"1px 2px"}}>{Math.round(zoom*100)}%</div>
       </div>
       <div style={{position:"absolute",bottom:10,left:12,zIndex:200,fontSize:9,color:"#aaa",pointerEvents:"none",userSelect:"none"}}>Scroll to zoom · Drag to pan</div>
-      <div id="momap-canvas" ref={canvasRef} style={{position:"absolute",inset:0,transformOrigin:"0 0",transform:`translate(${panX}px,${panY}px) scale(${zoom})`,background:"#fff",overflow:"visible"}} onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();setDropXFrac(null);if(!draggingInit)return;onDrop(draggingInit);}}>
-        <img src={BG_URL} alt="" aria-hidden="true" crossOrigin="anonymous" style={{position:"absolute",left:0,right:0,top:BG_OFFSET_PX,width:"100%",height:`calc(100% - ${BG_OFFSET_PX}px)`,objectFit:"fill",pointerEvents:"none",userSelect:"none",display:"block"}} draggable={false}/>
+      <div id="momap-canvas" ref={canvasRef} style={{position:"absolute",top:0,left:0,width:contentW,height:"100%",transformOrigin:"0 0",transform:`translate(${panX}px,${panY}px) scale(${zoom})`,background:"#fff",overflow:"visible"}} onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();setDropXFrac(null);if(!draggingInit)return;onDrop(draggingInit);}}>
+        <img src={BG_URL} alt="" aria-hidden="true" crossOrigin="anonymous" style={{position:"absolute",left:0,top:BG_OFFSET_PX,width:"100%",height:`calc(100% - ${BG_OFFSET_PX}px)`,objectFit:"fill",pointerEvents:"none",userSelect:"none",display:"block"}} draggable={false}/>
         {/* Month gridlines */}
         {settings?.showMonthLines&&(()=>{const lines=[];const totalM=maxM-minM;if(totalM>0&&totalM<=120){for(let m=Math.ceil(minM);m<maxM;m++){const xf=(m-minM)/(maxM-minM);const isYearBoundary=m%12===0;lines.push(<div key={m} style={{position:"absolute",top:0,bottom:40,left:`${xf*100}%`,borderLeft:`1px solid rgba(0,0,0,${isYearBoundary?0.10:0.05})`,pointerEvents:"none"}}/>);if(isYearBoundary){const yr=Math.floor(m/12);lines.push(<div key={`yr${m}`} style={{position:"absolute",bottom:44,left:`${xf*100}%`,transform:"translateX(-50%)",fontSize:8,color:"rgba(0,0,0,0.25)",pointerEvents:"none",whiteSpace:"nowrap",fontWeight:600}}>{yr}</div>);}}}return lines;})()}
         {/* Layer grouping bands */}
@@ -597,7 +605,7 @@ function MomentumCanvas({initiatives,horizons,settings,displayFields,fontSize,la
             :null;
           const finalStem=stemOverride!==null?stemOverride:Math.max(20,baseStem+autoExtra);
           return (
-            <InitiativePin key={init.id} init={{...init,stemHeight:finalStem}} xPct={Math.max(2,Math.min(98,xFrac*100))} dotYPct={dotY} displayFields={displayFields} fontSize={fontSize} labelWidth={labelWidth} minM={minM} maxM={maxM} onUpdateDate={date=>onUpdateInitiative(init.id,{date})} onUpdateOffsetY={o=>onUpdateInitiative(init.id,{offsetY:o})} onUpdateDateAndOffset={(date,offsetY)=>onUpdateInitiative(init.id,{date,offsetY})} onUpdateStemHeight={h=>onUpdateInitiative(init.id,{stemHeight:h})} onUpdateLabelWidth={w=>onUpdateInitiative(init.id,{labelWidth:w})} onRemoveFromMap={()=>onUpdateInitiative(init.id,{onMap:false,offsetY:0})} onUpdateProgress={p=>onUpdateInitiative(init.id,{progress:p})} onFocusInit={onFocusInit}/>
+            <InitiativePin key={init.id} init={{...init,stemHeight:finalStem}} xPct={Math.max(2,Math.min(98,xFrac*100))} dotYPct={dotY} displayFields={displayFields} fontSize={fontSize} labelWidth={labelWidth} minM={minM} maxM={maxM} zoom={zoom} onUpdateDate={date=>onUpdateInitiative(init.id,{date})} onUpdateOffsetY={o=>onUpdateInitiative(init.id,{offsetY:o})} onUpdateDateAndOffset={(date,offsetY)=>onUpdateInitiative(init.id,{date,offsetY})} onUpdateStemHeight={h=>onUpdateInitiative(init.id,{stemHeight:h})} onUpdateLabelWidth={w=>onUpdateInitiative(init.id,{labelWidth:w})} onRemoveFromMap={()=>onUpdateInitiative(init.id,{onMap:false,offsetY:0})} onUpdateProgress={p=>onUpdateInitiative(init.id,{progress:p})} onFocusInit={onFocusInit}/>
           );
         })}
       </div>
