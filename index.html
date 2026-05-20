@@ -63,6 +63,7 @@ const CAT_COLORS = { WIN:"#FF0983", DIFF:"#FF9DCD", COMPETE:"#A4A09F", OTHER:"#C
 const MONTHS_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const MONTHS_FULL = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 const BG_OFFSET_PX = 125;
+const BG_BOTTOM_OFFSET = 65; // 40px horizon bar + 25px gap above it
 const MIN_YEAR = 2020;
 const PYRAMID_LAYERS = ["WIN","DIFF","COMPETE","FOUNDATION"];
 const RYG_COLORS = { R:"#ef4444", Y:"#f59e0b", G:"#22c55e" };
@@ -210,7 +211,7 @@ function curveYPct(xFrac) {
   return CURVE_LUT[Math.min(i,20)]+(CURVE_LUT[Math.min(i+1,20)]-CURVE_LUT[Math.min(i,20)])*f;
 }
 function curveYCanvas(xFrac,canvasHeight) {
-  const imgH=canvasHeight-BG_OFFSET_PX;
+  const imgH=canvasHeight-BG_OFFSET_PX-BG_BOTTOM_OFFSET;
   return (BG_OFFSET_PX+curveYPct(xFrac)/100*imgH)/canvasHeight*100;
 }
 function computeStaggerOffsets(initiatives,minM,maxM,cw) {
@@ -389,7 +390,7 @@ function InitiativePin({init,xPct,dotYPct,displayFields,fontSize,labelWidth,minM
     const mv=me=>{
       const r=dotDragRef.current.rect; if(!r) return;
       if(minM!=null&&maxM!=null){
-        // X is in canvas-content coordinates; the outer rect maps to contentW CSS px at scale(zoom)
+        // X position: outer rect width at zoom=1 maps to 0-100% of canvas
         const xFrac=Math.max(0,Math.min(1,(me.clientX-r.left)/(r.width)));
         finalDate=monthsToDate(Math.round(minM+xFrac*(maxM-minM)));
         setLiveXPct(Math.max(2,Math.min(98,xFrac*100)));
@@ -551,9 +552,7 @@ function MomentumCanvas({initiatives,horizons,settings,displayFields,fontSize,la
   const {minM,maxM}=getTimeline(horizons);
   const sorted=[...horizons].sort((a,b)=>a.order-b.order);
   const dividers=sorted.slice(0,-1).map(h=>(dateToMonths(horizonEndDate(h))-minM)/(maxM-minM));
-  // At least 90 CSS px per month so the map breathes; the canvas is panned/zoomed to navigate
-  const contentW=Math.max(canvasWidth,Math.max(1800,(maxM-minM)*90));
-  const staggerOffsets=useMemo(()=>computeStaggerOffsets(initiatives,minM,maxM,contentW),[initiatives,minM,maxM,contentW]);
+  const staggerOffsets=useMemo(()=>computeStaggerOffsets(initiatives,minM,maxM,canvasWidth),[initiatives,minM,maxM,canvasWidth]);
 
   return (
     <div id="momap-canvas-outer" ref={outerRef} style={{flex:1,position:"relative",overflowX:"hidden",overflowY:"visible",background:"#fff",minHeight:0}} onMouseDown={handleOuterMouseDown} onDragOver={e=>e.preventDefault()} onDragLeave={()=>setDropXFrac(null)} onDrop={e=>{e.preventDefault();setDropXFrac(null);if(!draggingInit)return;onDrop(draggingInit);}}>
@@ -564,8 +563,8 @@ function MomentumCanvas({initiatives,horizons,settings,displayFields,fontSize,la
         <div style={{fontSize:9,color:"#888",textAlign:"center",background:"rgba(255,255,255,0.7)",borderRadius:4,padding:"1px 2px"}}>{Math.round(zoom*100)}%</div>
       </div>
       <div style={{position:"absolute",bottom:10,left:12,zIndex:200,fontSize:9,color:"#aaa",pointerEvents:"none",userSelect:"none"}}>Scroll to zoom · Drag to pan</div>
-      <div id="momap-canvas" ref={canvasRef} style={{position:"absolute",top:0,left:0,width:contentW,height:"100%",transformOrigin:"0 0",transform:`translate(${panX}px,${panY}px) scale(${zoom})`,background:"#fff",overflow:"visible"}} onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();setDropXFrac(null);if(!draggingInit)return;onDrop(draggingInit);}}>
-        <img src={BG_URL} alt="" aria-hidden="true" crossOrigin="anonymous" style={{position:"absolute",left:0,top:BG_OFFSET_PX,width:"100%",height:`calc(100% - ${BG_OFFSET_PX}px)`,objectFit:"fill",pointerEvents:"none",userSelect:"none",display:"block"}} draggable={false}/>
+      <div id="momap-canvas" ref={canvasRef} style={{position:"absolute",inset:0,transformOrigin:"0 0",transform:`translate(${panX}px,${panY}px) scale(${zoom})`,background:"#fff",overflow:"visible"}} onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();setDropXFrac(null);if(!draggingInit)return;onDrop(draggingInit);}}>
+        <img src={BG_URL} alt="" aria-hidden="true" crossOrigin="anonymous" style={{position:"absolute",left:0,right:0,top:BG_OFFSET_PX,width:"100%",height:`calc(100% - ${BG_OFFSET_PX+BG_BOTTOM_OFFSET}px)`,objectFit:"fill",pointerEvents:"none",userSelect:"none",display:"block"}} draggable={false}/>
         {/* Month gridlines */}
         {settings?.showMonthLines&&(()=>{const lines=[];const totalM=maxM-minM;if(totalM>0&&totalM<=120){for(let m=Math.ceil(minM);m<maxM;m++){const xf=(m-minM)/(maxM-minM);const isYearBoundary=m%12===0;lines.push(<div key={m} style={{position:"absolute",top:0,bottom:40,left:`${xf*100}%`,borderLeft:`1px solid rgba(0,0,0,${isYearBoundary?0.10:0.05})`,pointerEvents:"none"}}/>);if(isYearBoundary){const yr=Math.floor(m/12);lines.push(<div key={`yr${m}`} style={{position:"absolute",bottom:44,left:`${xf*100}%`,transform:"translateX(-50%)",fontSize:8,color:"rgba(0,0,0,0.25)",pointerEvents:"none",whiteSpace:"nowrap",fontWeight:600}}>{yr}</div>);}}}return lines;})()}
         {/* Layer grouping bands */}
