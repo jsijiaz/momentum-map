@@ -11,6 +11,7 @@
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/lz-string@1.5.0/libs/lz-string.min.js"></script>
   <style>
     *, *::before, *::after { box-sizing:border-box; margin:0; padding:0; }
     html { -webkit-font-smoothing:antialiased; }
@@ -93,15 +94,21 @@ function isValidSessionId(s) {
 }
 function encodeState(obj) {
   try {
-    const json=JSON.stringify(obj);
-    const uint8=new TextEncoder().encode(json);
-    let bin=''; uint8.forEach(b=>bin+=String.fromCharCode(b));
-    return btoa(bin).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+    // Strip large binary blobs from URL — logo persists in localStorage only
+    const clean=JSON.parse(JSON.stringify(obj));
+    (clean.tabs||[]).forEach(t=>{ if(t.settings) t.settings.brandLogoUrl=null; });
+    return LZString.compressToEncodedURIComponent(JSON.stringify(clean));
   } catch(e){ return null; }
 }
-function decodeState(b64) {
+function decodeState(s) {
   try {
-    const padded=b64.replace(/-/g,'+').replace(/_/g,'/')+('==='.slice(0,(4-b64.length%4)%4));
+    // Try LZ-string first (new format)
+    const json=LZString.decompressFromEncodedURIComponent(s);
+    if(json) return JSON.parse(json);
+  } catch(_){}
+  try {
+    // Legacy base64 fallback
+    const padded=s.replace(/-/g,'+').replace(/_/g,'/')+('==='.slice(0,(4-s.length%4)%4));
     const bin=atob(padded);
     const uint8=new Uint8Array(bin.length);
     for(let i=0;i<bin.length;i++) uint8[i]=bin.charCodeAt(i);
@@ -109,7 +116,8 @@ function decodeState(b64) {
   } catch(e){ return null; }
 }
 function getEncodedStateFromHash() {
-  const m=window.location.hash.match(/[#&]s=([A-Za-z0-9\-_]+)/);
+  // LZ-string uses A-Za-z0-9 + $ + - chars; legacy base64url uses A-Za-z0-9 - _
+  const m=window.location.hash.match(/[#&]s=([A-Za-z0-9\-_+$]+)/);
   return m?decodeState(m[1]):null;
 }
 function setHashWithState(sid,state) {
@@ -333,9 +341,15 @@ function InitiativePin({init,xPct,dotYPct,displayFields,fontSize,labelWidth,minM
   const [dotDragging,setDotDragging]=useState(false);
   const [lblDragging,setLblDragging]=useState(false);
   const [wDragging,setWDragging]=useState(false);
+  // Local visual overrides during drag — only this pin re-renders on mousemove
+  const [liveXPct,setLiveXPct]=useState(null);
+  const [liveOFFY,setLiveOFFY]=useState(null);
+  const [liveStem,setLiveStem]=useState(null);
+  const [liveLW,setLiveLW]=useState(null);
   const dotDragRef=useRef({y:0,x:0,origOffset:0});
   const lblDragRef=useRef({y:0,origStem:65});
   const wDragRef=useRef({x:0,origW:200});
+  const rafRef=useRef(null);
   const tooltipRef=useRef(null);
   const dotRef=useRef(null);
   const color=CAT_COLORS[init.category]||"#A4A09F";
@@ -344,6 +358,17 @@ function InitiativePin({init,xPct,dotYPct,displayFields,fontSize,labelWidth,minM
   const LWIDTH=typeof init.labelWidth==="number"?init.labelWidth:(labelWidth||200);
   const fs=fontSize||11;
   const progStyle=init.progress?PROGRESS_COLORS[init.progress]:null;
+  // Use live overrides while dragging, props otherwise
+  const dispXPct=liveXPct??xPct;
+  const dispOFFY=liveOFFY??OFFY;
+  const dispStem=liveStem??STEM;
+  const dispLW=liveLW??LWIDTH;
+
+  // Schedule a global commit at next animation frame (throttles re-renders of siblings)
+  const scheduleGlobal=useCallback(fn=>{
+    if(rafRef.current) cancelAnimationFrame(rafRef.current);
+    rafRef.current=requestAnimationFrame(()=>{fn();rafRef.current=null;});
+  },[]);
 
   useEffect(()=>{
     if(!pinned) return;
@@ -357,54 +382,85 @@ function InitiativePin({init,xPct,dotYPct,displayFields,fontSize,labelWidth,minM
     e.preventDefault(); e.stopPropagation();
     setDotDragging(true); setPinned(false);
     dotDragRef.current={y:e.clientY,x:e.clientX,origOffset:OFFY};
-    const up=()=>{setDotDragging(false);window.removeEventListener("mouseup",up);window.removeEventListener("mousemove",mv);};
+    let pDate=null, pOFFY=OFFY;
+    const up=()=>{
+      // Final commit on release
+      if(pDate&&validateDate(pDate)) onUpdateDate(pDate);
+      onUpdateOffsetY(parseFloat(pOFFY.toFixed(2)));
+      setLiveXPct(null); setLiveOFFY(null);
+      setDotDragging(false);
+      if(rafRef.current){cancelAnimationFrame(rafRef.current);rafRef.current=null;}
+      window.removeEventListener("mouseup",up); window.removeEventListener("mousemove",mv);
+    };
     const mv=me=>{
-      const el=document.getElementById("momap-canvas");
+      const el=document.getElementById("momap-canvas-outer");
       if(!el) return;
       const rect=el.getBoundingClientRect();
-      // Horizontal drag → update date
+      // Horizontal → date
       if(minM!=null&&maxM!=null){
         const xFrac=Math.max(0,Math.min(1,(me.clientX-rect.left)/rect.width));
-        const newDate=monthsToDate(Math.round(minM+xFrac*(maxM-minM)));
-        if(validateDate(newDate)) onUpdateDate(newDate);
+        pDate=monthsToDate(Math.round(minM+xFrac*(maxM-minM)));
+        setLiveXPct(Math.max(2,Math.min(98,xFrac*100))); // instant local visual
       }
-      // Vertical drag → update offsetY (% of canvas height)
+      // Vertical → offsetY
       const dyPx=me.clientY-dotDragRef.current.y;
-      const dyPct=rect.height>0?(dyPx/rect.height)*100:0;
-      onUpdateOffsetY(parseFloat((dotDragRef.current.origOffset+dyPct).toFixed(2)));
+      pOFFY=dotDragRef.current.origOffset+(rect.height>0?(dyPx/rect.height)*100:0);
+      setLiveOFFY(pOFFY); // instant local visual
+      // Throttled global so siblings update at frame rate
+      scheduleGlobal(()=>{
+        if(pDate&&validateDate(pDate)) onUpdateDate(pDate);
+        onUpdateOffsetY(parseFloat(pOFFY.toFixed(2)));
+      });
     };
-    window.addEventListener("mousemove",mv);window.addEventListener("mouseup",up);
-  },[minM,maxM,OFFY,onUpdateDate,onUpdateOffsetY]);
+    window.addEventListener("mousemove",mv); window.addEventListener("mouseup",up);
+  },[minM,maxM,OFFY,onUpdateDate,onUpdateOffsetY,scheduleGlobal]);
 
   const handleLblDown=useCallback(e=>{
     if(e.button!==0) return;
     e.preventDefault(); e.stopPropagation();
     setLblDragging(true);
     lblDragRef.current={y:e.clientY,origStem:STEM};
-    const up=()=>{setLblDragging(false);window.removeEventListener("mouseup",up);window.removeEventListener("mousemove",mv);};
-    const mv=me=>{onUpdateStemHeight(Math.max(20,Math.min(800,lblDragRef.current.origStem+(lblDragRef.current.y-me.clientY))));};
-    window.addEventListener("mousemove",mv);window.addEventListener("mouseup",up);
-  },[STEM,onUpdateStemHeight]);
+    let pStem=STEM;
+    const up=()=>{
+      onUpdateStemHeight(pStem);
+      setLiveStem(null); setLblDragging(false);
+      if(rafRef.current){cancelAnimationFrame(rafRef.current);rafRef.current=null;}
+      window.removeEventListener("mouseup",up); window.removeEventListener("mousemove",mv);
+    };
+    const mv=me=>{
+      pStem=Math.max(20,Math.min(800,lblDragRef.current.origStem+(lblDragRef.current.y-me.clientY)));
+      setLiveStem(pStem); // instant local visual
+      scheduleGlobal(()=>onUpdateStemHeight(pStem));
+    };
+    window.addEventListener("mousemove",mv); window.addEventListener("mouseup",up);
+  },[STEM,onUpdateStemHeight,scheduleGlobal]);
 
   const handleWidthDown=useCallback(e=>{
     if(e.button!==0) return;
     e.preventDefault(); e.stopPropagation();
     setWDragging(true);
     wDragRef.current={x:e.clientX,origW:LWIDTH};
-    const up=()=>{setWDragging(false);window.removeEventListener("mouseup",up);window.removeEventListener("mousemove",mv);};
-    const mv=me=>{
-      const delta=me.clientX-wDragRef.current.x;
-      const newW=Math.max(80,Math.min(500,wDragRef.current.origW+delta*2));
-      if(onUpdateLabelWidth) onUpdateLabelWidth(Math.round(newW));
+    let pW=LWIDTH;
+    const up=()=>{
+      if(onUpdateLabelWidth) onUpdateLabelWidth(pW);
+      setLiveLW(null); setWDragging(false);
+      if(rafRef.current){cancelAnimationFrame(rafRef.current);rafRef.current=null;}
+      window.removeEventListener("mouseup",up); window.removeEventListener("mousemove",mv);
     };
-    window.addEventListener("mousemove",mv);window.addEventListener("mouseup",up);
-  },[LWIDTH,onUpdateLabelWidth]);
+    const mv=me=>{
+      pW=Math.max(80,Math.min(500,Math.round(wDragRef.current.origW+(me.clientX-wDragRef.current.x)*2)));
+      setLiveLW(pW); // instant local visual
+      scheduleGlobal(()=>{if(onUpdateLabelWidth)onUpdateLabelWidth(pW);});
+    };
+    window.addEventListener("mousemove",mv); window.addEventListener("mouseup",up);
+  },[LWIDTH,onUpdateLabelWidth,scheduleGlobal]);
 
   const showTooltip=(pinned||hovered)&&!dotDragging&&!lblDragging&&!wDragging;
+  const anyDrag=dotDragging||lblDragging||wDragging;
 
   return (
-    <div style={{position:"absolute",left:`${xPct}%`,top:`${dotYPct+OFFY}%`,transform:"translate(-50%,-50%)",zIndex:showTooltip||dotDragging?50:10,userSelect:"none"}}>
-      <div style={{position:"absolute",bottom:`calc(100% + ${STEM}px)`,left:"50%",transform:"translateX(-50%)",textAlign:"center",width:LWIDTH,maxWidth:LWIDTH,boxSizing:"border-box",cursor:"ns-resize",pointerEvents:"auto",background:"#fff",borderRadius:3,padding:"2px 3px"}} onMouseDown={handleLblDown} onMouseEnter={()=>setHovered(true)} onMouseLeave={()=>{if(!dotDragging&&!lblDragging)setHovered(false);}} title="Drag up/down to adjust stem height">
+    <div style={{position:"absolute",left:`${dispXPct}%`,top:`${dotYPct+dispOFFY}%`,transform:"translate(-50%,-50%)",zIndex:anyDrag?1000:showTooltip?50:10,userSelect:"none",willChange:anyDrag?"transform":"auto"}}>
+      <div style={{position:"absolute",bottom:`calc(100% + ${dispStem}px)`,left:"50%",transform:"translateX(-50%)",textAlign:"center",width:dispLW,maxWidth:dispLW,boxSizing:"border-box",cursor:"ns-resize",pointerEvents:"auto",background:"#fff",borderRadius:3,padding:"2px 3px"}} onMouseDown={handleLblDown} onMouseEnter={()=>setHovered(true)} onMouseLeave={()=>{if(!dotDragging&&!lblDragging)setHovered(false);}} title="Drag up/down to adjust stem height">
         {/* right-edge width resize handle */}
         <div onMouseDown={handleWidthDown} title="Drag to resize label width" style={{position:"absolute",top:0,bottom:0,right:-4,width:8,cursor:"ew-resize",zIndex:5,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={e=>e.stopPropagation()}>
           <div style={{width:2,height:14,borderRadius:1,background:"rgba(100,100,100,0.25)"}}/>
@@ -420,7 +476,7 @@ function InitiativePin({init,xPct,dotYPct,displayFields,fontSize,labelWidth,minM
         )}
         {displayFields.includes("category")&&<span className="cat-badge" style={{background:color+"22",color,border:`1px solid ${color}55`,marginTop:2,display:"inline-block",fontSize:fs-2}}>{init.category}</span>}
       </div>
-      <div style={{position:"absolute",bottom:"50%",left:"50%",transform:"translateX(-50%)",width:1.5,height:STEM,background:"rgba(20,20,20,0.55)",pointerEvents:"none"}}/>
+      <div style={{position:"absolute",bottom:"50%",left:"50%",transform:"translateX(-50%)",width:1.5,height:dispStem,background:"rgba(20,20,20,0.55)",pointerEvents:"none"}}/>
       <div ref={dotRef} style={{width:12,height:12,borderRadius:"50%",background:color,border:"2px solid white",boxShadow:`0 0 0 1.5px ${color}`,position:"relative",zIndex:2,cursor:dotDragging?"grabbing":"grab",transition:dotDragging?"none":"transform 0.15s",transform:showTooltip?"scale(1.5)":"scale(1)"}} onMouseEnter={()=>setHovered(true)} onMouseLeave={()=>{if(!dotDragging)setHovered(false);}} onMouseDown={handleDotDown} onClick={e=>{e.stopPropagation();if(!dotDragging){setPinned(p=>!p);onFocusInit&&onFocusInit(init.id);}}} title="Drag up/down · Click for details"/>
       {showTooltip&&(
         <div ref={tooltipRef} style={{position:"absolute",top:"calc(100% + 12px)",left:"50%",transform:"translateX(-50%)",background:"#fff",border:"1px solid #eee",borderRadius:12,boxShadow:"0 8px 28px rgba(0,0,0,0.13)",padding:"12px 14px",minWidth:220,zIndex:100,textAlign:"left"}} onMouseEnter={()=>setHovered(true)} onMouseLeave={()=>setHovered(false)}>
