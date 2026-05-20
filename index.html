@@ -356,22 +356,25 @@ function InitiativePin({init,xPct,dotYPct,displayFields,fontSize,labelWidth,minM
     if(e.button!==0) return;
     e.preventDefault(); e.stopPropagation();
     setDotDragging(true); setPinned(false);
-    dotDragRef.current={y:e.clientY,x:e.clientX};
+    dotDragRef.current={y:e.clientY,x:e.clientX,origOffset:OFFY};
     const up=()=>{setDotDragging(false);window.removeEventListener("mouseup",up);window.removeEventListener("mousemove",mv);};
     const mv=me=>{
       const el=document.getElementById("momap-canvas");
       if(!el) return;
       const rect=el.getBoundingClientRect();
+      // Horizontal drag → update date
       if(minM!=null&&maxM!=null){
-        // Horizontal drag only — dot always stays on the curve
         const xFrac=Math.max(0,Math.min(1,(me.clientX-rect.left)/rect.width));
         const newDate=monthsToDate(Math.round(minM+xFrac*(maxM-minM)));
-        if(!validateDate(newDate)) return;
-        onUpdateDate(newDate);
+        if(validateDate(newDate)) onUpdateDate(newDate);
       }
+      // Vertical drag → update offsetY (% of canvas height)
+      const dyPx=me.clientY-dotDragRef.current.y;
+      const dyPct=rect.height>0?(dyPx/rect.height)*100:0;
+      onUpdateOffsetY(parseFloat((dotDragRef.current.origOffset+dyPct).toFixed(2)));
     };
     window.addEventListener("mousemove",mv);window.addEventListener("mouseup",up);
-  },[minM,maxM,onUpdateDate]);
+  },[minM,maxM,OFFY,onUpdateDate,onUpdateOffsetY]);
 
   const handleLblDown=useCallback(e=>{
     if(e.button!==0) return;
@@ -400,7 +403,7 @@ function InitiativePin({init,xPct,dotYPct,displayFields,fontSize,labelWidth,minM
   const showTooltip=(pinned||hovered)&&!dotDragging&&!lblDragging&&!wDragging;
 
   return (
-    <div style={{position:"absolute",left:`${xPct}%`,top:`${dotYPct}%`,transform:"translate(-50%,-50%)",zIndex:showTooltip||dotDragging?50:10,userSelect:"none"}}>
+    <div style={{position:"absolute",left:`${xPct}%`,top:`${dotYPct+OFFY}%`,transform:"translate(-50%,-50%)",zIndex:showTooltip||dotDragging?50:10,userSelect:"none"}}>
       <div style={{position:"absolute",bottom:`calc(100% + ${STEM}px)`,left:"50%",transform:"translateX(-50%)",textAlign:"center",width:LWIDTH,maxWidth:LWIDTH,boxSizing:"border-box",cursor:"ns-resize",pointerEvents:"auto",background:"rgba(255,255,255,0.55)",borderRadius:7,padding:"3px 6px",backdropFilter:"blur(2px)",WebkitBackdropFilter:"blur(2px)"}} onMouseDown={handleLblDown} title="Drag up/down to adjust stem height">
         {/* right-edge width resize handle */}
         <div onMouseDown={handleWidthDown} title="Drag to resize label width" style={{position:"absolute",top:0,bottom:0,right:-4,width:8,cursor:"ew-resize",zIndex:5,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={e=>e.stopPropagation()}>
@@ -462,8 +465,10 @@ function MomentumCanvas({initiatives,horizons,settings,displayFields,fontSize,la
   const ZOOM_MIN=0.25,ZOOM_MAX=3,ZOOM_STEP=0.1;
 
   useEffect(()=>{
-    const obs=new ResizeObserver(entries=>{for(const e of entries){setCanvasWidth(e.contentRect.width);setCanvasHeight(e.contentRect.height);}});
-    if(canvasRef.current) obs.observe(canvasRef.current);
+    const readSize=()=>{const el=outerRef.current;if(!el)return;setCanvasWidth(el.clientWidth);setCanvasHeight(el.clientHeight);};
+    readSize();
+    const obs=new ResizeObserver(readSize);
+    if(outerRef.current) obs.observe(outerRef.current);
     return()=>obs.disconnect();
   },[]);
   useEffect(()=>{
