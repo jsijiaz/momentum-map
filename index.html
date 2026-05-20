@@ -380,8 +380,8 @@ function InitiativePin({init,xPct,dotYPct,displayFields,fontSize,labelWidth,minM
     e.preventDefault(); e.stopPropagation();
     dragMovedRef.current=false;
     setDotDragging(true); setPinned(false);
-    // Cache bounding rect once at mousedown — no layout thrash per mousemove
-    const rect=document.getElementById("momap-canvas-outer")?.getBoundingClientRect();
+    // Use the INNER transformed canvas rect — it already encodes pan+zoom, so no manual /zoom needed
+    const rect=document.getElementById("momap-canvas")?.getBoundingClientRect();
     // origOffset = current absolute Y% of the dot (already resolved by parent)
     dotDragRef.current={y:e.clientY,x:e.clientX,origOffset:dotYPct,rect};
     let finalDate=null, finalAbsY=null;
@@ -394,15 +394,15 @@ function InitiativePin({init,xPct,dotYPct,displayFields,fontSize,labelWidth,minM
     const mv=me=>{
       dragMovedRef.current=true;
       const r=dotDragRef.current.rect; if(!r) return;
-      // X → date
+      // X → date. r is the scaled canvas rect so xFrac is correct regardless of zoom/pan
       if(minM!=null&&maxM!=null){
-        const xFrac=Math.max(0,Math.min(1,(me.clientX-r.left)/(r.width)));
+        const xFrac=Math.max(0,Math.min(1,(me.clientX-r.left)/r.width));
         finalDate=monthsToDate(Math.round(minM+xFrac*(maxM-minM)));
         setLiveXPct(Math.max(2,Math.min(98,xFrac*100)));
       }
-      // Y → absolute canvas position (divide by zoom for 1:1 feel)
+      // Y → absolute canvas %. r.height is scaled so dyPx/r.height gives correct canvas %
       const dyPx=me.clientY-dotDragRef.current.y;
-      finalAbsY=dotDragRef.current.origOffset+(r.height>0?((dyPx/zoom)/r.height)*100:0);
+      finalAbsY=dotDragRef.current.origOffset+(r.height>0?(dyPx/r.height)*100:0);
       setLiveOFFY(finalAbsY);
     };
     window.addEventListener("mousemove",mv); window.addEventListener("mouseup",up);
@@ -452,8 +452,11 @@ function InitiativePin({init,xPct,dotYPct,displayFields,fontSize,labelWidth,minM
     window.addEventListener("mousemove",mv); window.addEventListener("mouseup",up);
   },[LWIDTH,zoom,onUpdateLabelWidth]);
 
-  const showTooltip=(pinned||hovered)&&!dotDragging&&!lblDragging&&!wDragging;
   const anyDrag=dotDragging||lblDragging||wDragging;
+  // Card only shows when explicitly pinned via double-click (hover alone does NOT open it)
+  const showTooltip=pinned&&!anyDrag;
+  // Dot grows on hover or when pinned — separately from card visibility
+  const dotScaleUp=(hovered||pinned)&&!dotDragging;
   // Pinned (clicked) = always front; dragging = front; hover = elevated; idle = base
   const zIdx=pinned||anyDrag?1000:hovered?200:10;
 
@@ -476,7 +479,7 @@ function InitiativePin({init,xPct,dotYPct,displayFields,fontSize,labelWidth,minM
         {displayFields.includes("category")&&<span className="cat-badge" style={{background:color+"22",color,border:`1px solid ${color}55`,marginTop:2,display:"inline-block",fontSize:fs-2}}>{init.category}</span>}
       </div>
       <div style={{position:"absolute",bottom:"50%",left:"50%",transform:"translateX(-50%)",width:1.5,height:dispStem,background:"rgba(20,20,20,0.55)",pointerEvents:"none"}}/>
-      <div ref={dotRef} style={{width:12,height:12,borderRadius:"50%",background:color,border:"2px solid white",boxShadow:`0 0 0 1.5px ${color}`,position:"relative",zIndex:2,cursor:dotDragging?"grabbing":"grab",transition:dotDragging?"none":"transform 0.15s",transform:showTooltip?"scale(1.5)":"scale(1)"}} onMouseEnter={()=>setHovered(true)} onMouseLeave={()=>{if(!dotDragging)setHovered(false);}} onMouseDown={handleDotDown} onClick={e=>{e.stopPropagation();if(!dragMovedRef.current){onFocusInit&&onFocusInit(init.id);}}} onDoubleClick={e=>{e.stopPropagation();if(!dragMovedRef.current){setPinned(p=>!p);}}} title="Drag freely to reposition · Double-click for details"/>
+      <div ref={dotRef} style={{width:12,height:12,borderRadius:"50%",background:color,border:"2px solid white",boxShadow:`0 0 0 1.5px ${color}`,position:"relative",zIndex:2,cursor:dotDragging?"grabbing":"grab",transition:dotDragging?"none":"transform 0.15s",transform:dotScaleUp?"scale(1.5)":"scale(1)"}} onMouseEnter={()=>setHovered(true)} onMouseLeave={()=>{if(!dotDragging)setHovered(false);}} onMouseDown={handleDotDown} onClick={e=>{e.stopPropagation();if(!dragMovedRef.current){onFocusInit&&onFocusInit(init.id);}}} onDoubleClick={e=>{e.stopPropagation();if(!dragMovedRef.current){setPinned(p=>!p);}}} title="Drag freely to reposition · Double-click for details"/>
       {showTooltip&&(
         <div ref={tooltipRef} style={{position:"absolute",top:"calc(100% + 12px)",left:"50%",transform:"translateX(-50%)",background:"#fff",border:"1px solid #eee",borderRadius:12,boxShadow:"0 8px 28px rgba(0,0,0,0.13)",padding:"12px 14px",minWidth:220,zIndex:100,textAlign:"left"}} onMouseEnter={()=>setHovered(true)} onMouseLeave={()=>setHovered(false)}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6}}>
@@ -603,9 +606,10 @@ function MomentumCanvas({initiatives,horizons,settings,displayFields,fontSize,la
         {dropXFrac!=null&&draggingInit&&<div style={{position:"absolute",top:0,bottom:0,left:`${dropXFrac*100}%`,width:2,background:"#FF0983",opacity:0.6,pointerEvents:"none"}}/>}
         {initiatives.filter(i=>i.onMap&&!(settings?.hiddenLayers||[]).includes(i.category)).map(init=>{
           const xFrac=dateToX(init.date,minM,maxM);
-          // curveY = default position on curve; dotY = absolute if user repositioned, else curve
+          // curveY = default position on curve; dotY = absolute if user has manually repositioned
+          // offsetY===0 means "never set" (old reset value) → fall back to curve
           const curveY=curveYCanvas(xFrac,canvasHeight);
-          const dotY=typeof init.offsetY==="number"?init.offsetY:curveY;
+          const dotY=(typeof init.offsetY==="number"&&init.offsetY!==0)?init.offsetY:curveY;
           const baseStem=typeof init.stemHeight==="number"?init.stemHeight:65;
           const autoExtra=(staggerOffsets[init.id]||0)*3;
           // In groupByLayer mode, compute stem so label lands in the category band
