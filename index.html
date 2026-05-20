@@ -404,7 +404,7 @@ function InitiativePin({init,xPct,dotYPct,displayFields,fontSize,labelWidth,minM
 
   return (
     <div style={{position:"absolute",left:`${xPct}%`,top:`${dotYPct+OFFY}%`,transform:"translate(-50%,-50%)",zIndex:showTooltip||dotDragging?50:10,userSelect:"none"}}>
-      <div style={{position:"absolute",bottom:`calc(100% + ${STEM}px)`,left:"50%",transform:"translateX(-50%)",textAlign:"center",width:LWIDTH,maxWidth:LWIDTH,boxSizing:"border-box",cursor:"ns-resize",pointerEvents:"auto",background:"rgba(255,255,255,0.55)",borderRadius:7,padding:"3px 6px",backdropFilter:"blur(2px)",WebkitBackdropFilter:"blur(2px)"}} onMouseDown={handleLblDown} title="Drag up/down to adjust stem height">
+      <div style={{position:"absolute",bottom:`calc(100% + ${STEM}px)`,left:"50%",transform:"translateX(-50%)",textAlign:"center",width:LWIDTH,maxWidth:LWIDTH,boxSizing:"border-box",cursor:"ns-resize",pointerEvents:"auto",background:"#fff",borderRadius:3,padding:"2px 3px"}} onMouseDown={handleLblDown} title="Drag up/down to adjust stem height">
         {/* right-edge width resize handle */}
         <div onMouseDown={handleWidthDown} title="Drag to resize label width" style={{position:"absolute",top:0,bottom:0,right:-4,width:8,cursor:"ew-resize",zIndex:5,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={e=>e.stopPropagation()}>
           <div style={{width:2,height:14,borderRadius:1,background:"rgba(100,100,100,0.25)"}}/>
