@@ -2695,9 +2695,12 @@ function App() {
     saveTimer.current=setTimeout(()=>{
       const stateData={tabs,activeTabId,activeView};
       saveToLocalStorage(stateData);
-      fetch(`${API}/api/state`,{method:"POST",headers:{"Content-Type":"application/json","x-session-id":sessionId},body:JSON.stringify({state:stateData})})
-        .then(()=>{setSaveStatus("saved");setTimeout(()=>setSaveStatus(""),2000);})
-        .catch(()=>{setSaveStatus("saved");setTimeout(()=>setSaveStatus(""),2000);});
+      // Always encode state into URL hash so the link is always shareable without a server
+      setHashWithState(sessionId,stateData);
+      setSaveStatus("saved");
+      setTimeout(()=>setSaveStatus(""),2000);
+      // Best-effort API sync (Render free tier may be cold)
+      fetch(`${API}/api/state`,{method:"POST",headers:{"Content-Type":"application/json","x-session-id":sessionId},body:JSON.stringify({state:stateData})}).catch(()=>{});
     },800);
     return()=>{if(saveTimer.current)clearTimeout(saveTimer.current);};
   },[tabs,activeTabId,activeView,loaded,sessionId]);
