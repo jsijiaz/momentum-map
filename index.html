@@ -352,6 +352,7 @@ function InitiativePin({init,xPct,dotYPct,displayFields,fontSize,labelWidth,minM
   const dotDragRef=useRef({y:0,x:0,origOffset:0,rect:null});
   const lblDragRef=useRef({y:0,origStem:65});
   const wDragRef=useRef({x:0,origW:200});
+  const dragMovedRef=useRef(false);
   const tooltipRef=useRef(null);
   const dotRef=useRef(null);
   const color=CAT_COLORS[init.category]||"#A4A09F";
@@ -377,36 +378,35 @@ function InitiativePin({init,xPct,dotYPct,displayFields,fontSize,labelWidth,minM
   const handleDotDown=useCallback(e=>{
     if(e.button!==0) return;
     e.preventDefault(); e.stopPropagation();
+    dragMovedRef.current=false;
     setDotDragging(true); setPinned(false);
-    const isShift=e.shiftKey;
-    // Cache bounding rect once — avoids layout thrash on every mousemove
+    // Cache bounding rect once at mousedown — no layout thrash per mousemove
     const rect=document.getElementById("momap-canvas-outer")?.getBoundingClientRect();
-    dotDragRef.current={y:e.clientY,x:e.clientX,origOffset:OFFY,rect,isShift};
-    let finalDate=null, finalOFFY=OFFY; let offyChanged=false;
+    // origOffset = current absolute Y% of the dot (already resolved by parent)
+    dotDragRef.current={y:e.clientY,x:e.clientX,origOffset:dotYPct,rect};
+    let finalDate=null, finalAbsY=null;
     const up=()=>{
       if(finalDate&&validateDate(finalDate)) onUpdateDate(finalDate);
-      if(offyChanged) onUpdateOffsetY(parseFloat(finalOFFY.toFixed(2)));
+      if(finalAbsY!==null) onUpdateOffsetY(parseFloat(finalAbsY.toFixed(2)));
       setLiveXPct(null); setLiveOFFY(null); setDotDragging(false);
       window.removeEventListener("mouseup",up); window.removeEventListener("mousemove",mv);
     };
     const mv=me=>{
+      dragMovedRef.current=true;
       const r=dotDragRef.current.rect; if(!r) return;
-      if(!dotDragRef.current.isShift&&minM!=null&&maxM!=null){
-        // Normal drag: X = date change, Y stays on curve
+      // X → date
+      if(minM!=null&&maxM!=null){
         const xFrac=Math.max(0,Math.min(1,(me.clientX-r.left)/(r.width)));
         finalDate=monthsToDate(Math.round(minM+xFrac*(maxM-minM)));
         setLiveXPct(Math.max(2,Math.min(98,xFrac*100)));
       }
-      if(dotDragRef.current.isShift){
-        // Shift+drag: X fixed, Y offset moves freely
-        const dyPx=me.clientY-dotDragRef.current.y;
-        finalOFFY=dotDragRef.current.origOffset+(r.height>0?((dyPx/zoom)/r.height)*100:0);
-        offyChanged=true;
-        setLiveOFFY(finalOFFY);
-      }
+      // Y → absolute canvas position (divide by zoom for 1:1 feel)
+      const dyPx=me.clientY-dotDragRef.current.y;
+      finalAbsY=dotDragRef.current.origOffset+(r.height>0?((dyPx/zoom)/r.height)*100:0);
+      setLiveOFFY(finalAbsY);
     };
     window.addEventListener("mousemove",mv); window.addEventListener("mouseup",up);
-  },[minM,maxM,OFFY,zoom,onUpdateDate,onUpdateOffsetY]);
+  },[minM,maxM,dotYPct,zoom,onUpdateDate,onUpdateOffsetY]);
 
   const handleLblDown=useCallback(e=>{
     if(e.button!==0) return;
@@ -458,7 +458,7 @@ function InitiativePin({init,xPct,dotYPct,displayFields,fontSize,labelWidth,minM
   const zIdx=pinned||anyDrag?1000:hovered?200:10;
 
   return (
-    <div style={{position:"absolute",left:`${dispXPct}%`,top:`${dotYPct+dispOFFY}%`,transform:"translate(-50%,-50%)",zIndex:zIdx,userSelect:"none"}}>
+    <div style={{position:"absolute",left:`${dispXPct}%`,top:`${liveOFFY??dotYPct}%`,transform:"translate(-50%,-50%)",zIndex:zIdx,userSelect:"none"}}>
       <div style={{position:"absolute",bottom:`calc(100% + ${dispStem}px)`,left:"50%",transform:"translateX(-50%)",textAlign:"center",width:"max-content",maxWidth:dispLW,minWidth:40,boxSizing:"border-box",cursor:"move",pointerEvents:"auto",background:"#fff",borderRadius:3,padding:"2px 3px"}} onMouseDown={handleLblDown} onMouseEnter={()=>setHovered(true)} onMouseLeave={()=>{if(!dotDragging&&!lblDragging)setHovered(false);}} title="Drag up/down to change stem height · Drag left/right to resize label">
         {/* right-edge width resize handle */}
         <div onMouseDown={handleWidthDown} title="Drag to resize label width" style={{position:"absolute",top:0,bottom:0,right:-4,width:8,cursor:"ew-resize",zIndex:5,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={e=>e.stopPropagation()}>
@@ -476,7 +476,7 @@ function InitiativePin({init,xPct,dotYPct,displayFields,fontSize,labelWidth,minM
         {displayFields.includes("category")&&<span className="cat-badge" style={{background:color+"22",color,border:`1px solid ${color}55`,marginTop:2,display:"inline-block",fontSize:fs-2}}>{init.category}</span>}
       </div>
       <div style={{position:"absolute",bottom:"50%",left:"50%",transform:"translateX(-50%)",width:1.5,height:dispStem,background:"rgba(20,20,20,0.55)",pointerEvents:"none"}}/>
-      <div ref={dotRef} style={{width:12,height:12,borderRadius:"50%",background:color,border:"2px solid white",boxShadow:`0 0 0 1.5px ${color}`,position:"relative",zIndex:2,cursor:dotDragging?"grabbing":"grab",transition:dotDragging?"none":"transform 0.15s",transform:showTooltip?"scale(1.5)":"scale(1)"}} onMouseEnter={()=>setHovered(true)} onMouseLeave={()=>{if(!dotDragging)setHovered(false);}} onMouseDown={handleDotDown} onClick={e=>{e.stopPropagation();if(!dotDragging){setPinned(p=>!p);onFocusInit&&onFocusInit(init.id);}}} title="Drag to reposition date · Shift+drag to adjust vertical offset · Click for details"/>
+      <div ref={dotRef} style={{width:12,height:12,borderRadius:"50%",background:color,border:"2px solid white",boxShadow:`0 0 0 1.5px ${color}`,position:"relative",zIndex:2,cursor:dotDragging?"grabbing":"grab",transition:dotDragging?"none":"transform 0.15s",transform:showTooltip?"scale(1.5)":"scale(1)"}} onMouseEnter={()=>setHovered(true)} onMouseLeave={()=>{if(!dotDragging)setHovered(false);}} onMouseDown={handleDotDown} onClick={e=>{e.stopPropagation();if(!dragMovedRef.current){onFocusInit&&onFocusInit(init.id);}}} onDoubleClick={e=>{e.stopPropagation();if(!dragMovedRef.current){setPinned(p=>!p);}}} title="Drag freely to reposition · Double-click for details"/>
       {showTooltip&&(
         <div ref={tooltipRef} style={{position:"absolute",top:"calc(100% + 12px)",left:"50%",transform:"translateX(-50%)",background:"#fff",border:"1px solid #eee",borderRadius:12,boxShadow:"0 8px 28px rgba(0,0,0,0.13)",padding:"12px 14px",minWidth:220,zIndex:100,textAlign:"left"}} onMouseEnter={()=>setHovered(true)} onMouseLeave={()=>setHovered(false)}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6}}>
@@ -603,9 +603,9 @@ function MomentumCanvas({initiatives,horizons,settings,displayFields,fontSize,la
         {dropXFrac!=null&&draggingInit&&<div style={{position:"absolute",top:0,bottom:0,left:`${dropXFrac*100}%`,width:2,background:"#FF0983",opacity:0.6,pointerEvents:"none"}}/>}
         {initiatives.filter(i=>i.onMap&&!(settings?.hiddenLayers||[]).includes(i.category)).map(init=>{
           const xFrac=dateToX(init.date,minM,maxM);
-          // Dot Y always follows the curve; offsetY is a separate vertical offset applied in InitiativePin
+          // curveY = default position on curve; dotY = absolute if user repositioned, else curve
           const curveY=curveYCanvas(xFrac,canvasHeight);
-          const dotY=curveY;
+          const dotY=typeof init.offsetY==="number"?init.offsetY:curveY;
           const baseStem=typeof init.stemHeight==="number"?init.stemHeight:65;
           const autoExtra=(staggerOffsets[init.id]||0)*3;
           // In groupByLayer mode, compute stem so label lands in the category band
@@ -616,7 +616,7 @@ function MomentumCanvas({initiatives,horizons,settings,displayFields,fontSize,la
             :null;
           const finalStem=stemOverride!==null?stemOverride:Math.max(20,baseStem+autoExtra);
           return (
-            <InitiativePin key={init.id} init={{...init,stemHeight:finalStem}} xPct={Math.max(2,Math.min(98,xFrac*100))} dotYPct={dotY} displayFields={displayFields} fontSize={fontSize} labelWidth={labelWidth} minM={minM} maxM={maxM} zoom={zoom} onUpdateDate={date=>onUpdateInitiative(init.id,{date})} onUpdateOffsetY={o=>onUpdateInitiative(init.id,{offsetY:o})} onUpdateDateAndOffset={(date,offsetY)=>onUpdateInitiative(init.id,{date,offsetY})} onUpdateStemHeight={h=>onUpdateInitiative(init.id,{stemHeight:h})} onUpdateLabelWidth={w=>onUpdateInitiative(init.id,{labelWidth:w})} onRemoveFromMap={()=>onUpdateInitiative(init.id,{onMap:false,offsetY:null})} onUpdateProgress={p=>onUpdateInitiative(init.id,{progress:p})} onFocusInit={onFocusInit}/>
+            <InitiativePin key={init.id} init={{...init,stemHeight:finalStem}} xPct={Math.max(2,Math.min(98,xFrac*100))} dotYPct={dotY} displayFields={displayFields} fontSize={fontSize} labelWidth={labelWidth} minM={minM} maxM={maxM} zoom={zoom} onUpdateDate={date=>onUpdateInitiative(init.id,{date})} onUpdateOffsetY={o=>onUpdateInitiative(init.id,{offsetY:o})} onUpdateDateAndOffset={(date,offsetY)=>onUpdateInitiative(init.id,{date,offsetY})} onUpdateStemHeight={h=>onUpdateInitiative(init.id,{stemHeight:h})} onUpdateLabelWidth={w=>onUpdateInitiative(init.id,{labelWidth:w})} onRemoveFromMap={()=>onUpdateInitiative(init.id,{onMap:false,offsetY:undefined})} onUpdateProgress={p=>onUpdateInitiative(init.id,{progress:p})} onFocusInit={onFocusInit}/>
           );
         })}
       </div>
