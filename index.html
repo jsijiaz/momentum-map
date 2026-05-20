@@ -346,10 +346,9 @@ function InitiativePin({init,xPct,dotYPct,displayFields,fontSize,labelWidth,minM
   const [liveOFFY,setLiveOFFY]=useState(null);
   const [liveStem,setLiveStem]=useState(null);
   const [liveLW,setLiveLW]=useState(null);
-  const dotDragRef=useRef({y:0,x:0,origOffset:0});
+  const dotDragRef=useRef({y:0,x:0,origOffset:0,rect:null});
   const lblDragRef=useRef({y:0,origStem:65});
   const wDragRef=useRef({x:0,origW:200});
-  const rafRef=useRef(null);
   const tooltipRef=useRef(null);
   const dotRef=useRef(null);
   const color=CAT_COLORS[init.category]||"#A4A09F";
@@ -364,11 +363,6 @@ function InitiativePin({init,xPct,dotYPct,displayFields,fontSize,labelWidth,minM
   const dispStem=liveStem??STEM;
   const dispLW=liveLW??LWIDTH;
 
-  // Schedule a global commit at next animation frame (throttles re-renders of siblings)
-  const scheduleGlobal=useCallback(fn=>{
-    if(rafRef.current) cancelAnimationFrame(rafRef.current);
-    rafRef.current=requestAnimationFrame(()=>{fn();rafRef.current=null;});
-  },[]);
 
   useEffect(()=>{
     if(!pinned) return;
@@ -381,86 +375,74 @@ function InitiativePin({init,xPct,dotYPct,displayFields,fontSize,labelWidth,minM
     if(e.button!==0) return;
     e.preventDefault(); e.stopPropagation();
     setDotDragging(true); setPinned(false);
-    dotDragRef.current={y:e.clientY,x:e.clientX,origOffset:OFFY};
-    let pDate=null, pOFFY=OFFY;
+    // Cache bounding rect once — avoids layout thrash on every mousemove
+    const rect=document.getElementById("momap-canvas-outer")?.getBoundingClientRect();
+    dotDragRef.current={y:e.clientY,x:e.clientX,origOffset:OFFY,rect};
+    let finalDate=null, finalOFFY=OFFY;
     const up=()=>{
-      // Final commit on release
-      if(pDate&&validateDate(pDate)) onUpdateDate(pDate);
-      onUpdateOffsetY(parseFloat(pOFFY.toFixed(2)));
-      setLiveXPct(null); setLiveOFFY(null);
-      setDotDragging(false);
-      if(rafRef.current){cancelAnimationFrame(rafRef.current);rafRef.current=null;}
+      // Commit to global state exactly once, on release
+      if(finalDate&&validateDate(finalDate)) onUpdateDate(finalDate);
+      onUpdateOffsetY(parseFloat(finalOFFY.toFixed(2)));
+      setLiveXPct(null); setLiveOFFY(null); setDotDragging(false);
       window.removeEventListener("mouseup",up); window.removeEventListener("mousemove",mv);
     };
     const mv=me=>{
-      const el=document.getElementById("momap-canvas-outer");
-      if(!el) return;
-      const rect=el.getBoundingClientRect();
-      // Horizontal → date
+      const r=dotDragRef.current.rect; if(!r) return;
       if(minM!=null&&maxM!=null){
-        const xFrac=Math.max(0,Math.min(1,(me.clientX-rect.left)/rect.width));
-        pDate=monthsToDate(Math.round(minM+xFrac*(maxM-minM)));
-        setLiveXPct(Math.max(2,Math.min(98,xFrac*100))); // instant local visual
+        const xFrac=Math.max(0,Math.min(1,(me.clientX-r.left)/r.width));
+        finalDate=monthsToDate(Math.round(minM+xFrac*(maxM-minM)));
+        setLiveXPct(Math.max(2,Math.min(98,xFrac*100)));
       }
-      // Vertical → offsetY
-      const dyPx=me.clientY-dotDragRef.current.y;
-      pOFFY=dotDragRef.current.origOffset+(rect.height>0?(dyPx/rect.height)*100:0);
-      setLiveOFFY(pOFFY); // instant local visual
-      // Throttled global so siblings update at frame rate
-      scheduleGlobal(()=>{
-        if(pDate&&validateDate(pDate)) onUpdateDate(pDate);
-        onUpdateOffsetY(parseFloat(pOFFY.toFixed(2)));
-      });
+      finalOFFY=dotDragRef.current.origOffset+(r.height>0?((me.clientY-dotDragRef.current.y)/r.height)*100:0);
+      setLiveOFFY(finalOFFY);
     };
     window.addEventListener("mousemove",mv); window.addEventListener("mouseup",up);
-  },[minM,maxM,OFFY,onUpdateDate,onUpdateOffsetY,scheduleGlobal]);
+  },[minM,maxM,OFFY,onUpdateDate,onUpdateOffsetY]);
 
   const handleLblDown=useCallback(e=>{
     if(e.button!==0) return;
     e.preventDefault(); e.stopPropagation();
     setLblDragging(true);
     lblDragRef.current={y:e.clientY,origStem:STEM};
-    let pStem=STEM;
+    let finalStem=STEM;
     const up=()=>{
-      onUpdateStemHeight(pStem);
+      onUpdateStemHeight(finalStem);
       setLiveStem(null); setLblDragging(false);
-      if(rafRef.current){cancelAnimationFrame(rafRef.current);rafRef.current=null;}
       window.removeEventListener("mouseup",up); window.removeEventListener("mousemove",mv);
     };
     const mv=me=>{
-      pStem=Math.max(20,Math.min(800,lblDragRef.current.origStem+(lblDragRef.current.y-me.clientY)));
-      setLiveStem(pStem); // instant local visual
-      scheduleGlobal(()=>onUpdateStemHeight(pStem));
+      finalStem=Math.max(20,Math.min(800,lblDragRef.current.origStem+(lblDragRef.current.y-me.clientY)));
+      setLiveStem(finalStem);
     };
     window.addEventListener("mousemove",mv); window.addEventListener("mouseup",up);
-  },[STEM,onUpdateStemHeight,scheduleGlobal]);
+  },[STEM,onUpdateStemHeight]);
 
   const handleWidthDown=useCallback(e=>{
     if(e.button!==0) return;
     e.preventDefault(); e.stopPropagation();
     setWDragging(true);
     wDragRef.current={x:e.clientX,origW:LWIDTH};
-    let pW=LWIDTH;
+    let finalW=LWIDTH;
     const up=()=>{
-      if(onUpdateLabelWidth) onUpdateLabelWidth(pW);
+      if(onUpdateLabelWidth) onUpdateLabelWidth(finalW);
       setLiveLW(null); setWDragging(false);
-      if(rafRef.current){cancelAnimationFrame(rafRef.current);rafRef.current=null;}
       window.removeEventListener("mouseup",up); window.removeEventListener("mousemove",mv);
     };
     const mv=me=>{
-      pW=Math.max(80,Math.min(500,Math.round(wDragRef.current.origW+(me.clientX-wDragRef.current.x)*2)));
-      setLiveLW(pW); // instant local visual
-      scheduleGlobal(()=>{if(onUpdateLabelWidth)onUpdateLabelWidth(pW);});
+      finalW=Math.max(80,Math.min(500,Math.round(wDragRef.current.origW+(me.clientX-wDragRef.current.x))));
+      setLiveLW(finalW);
     };
     window.addEventListener("mousemove",mv); window.addEventListener("mouseup",up);
-  },[LWIDTH,onUpdateLabelWidth,scheduleGlobal]);
+  },[LWIDTH,onUpdateLabelWidth]);
 
   const showTooltip=(pinned||hovered)&&!dotDragging&&!lblDragging&&!wDragging;
   const anyDrag=dotDragging||lblDragging||wDragging;
+  // Pinned (clicked) = always front; dragging = front; hover = elevated; idle = base
+  const zIdx=pinned||anyDrag?1000:hovered?200:10;
 
   return (
-    <div style={{position:"absolute",left:`${dispXPct}%`,top:`${dotYPct+dispOFFY}%`,transform:"translate(-50%,-50%)",zIndex:anyDrag?1000:showTooltip?50:10,userSelect:"none",willChange:anyDrag?"transform":"auto"}}>
-      <div style={{position:"absolute",bottom:`calc(100% + ${dispStem}px)`,left:"50%",transform:"translateX(-50%)",textAlign:"center",width:dispLW,maxWidth:dispLW,boxSizing:"border-box",cursor:"ns-resize",pointerEvents:"auto",background:"#fff",borderRadius:3,padding:"2px 3px"}} onMouseDown={handleLblDown} onMouseEnter={()=>setHovered(true)} onMouseLeave={()=>{if(!dotDragging&&!lblDragging)setHovered(false);}} title="Drag up/down to adjust stem height">
+    <div style={{position:"absolute",left:`${dispXPct}%`,top:`${dotYPct+dispOFFY}%`,transform:"translate(-50%,-50%)",zIndex:zIdx,userSelect:"none"}}>
+      <div style={{position:"absolute",bottom:`calc(100% + ${dispStem}px)`,left:"50%",transform:"translateX(-50%)",textAlign:"center",width:"max-content",maxWidth:dispLW,minWidth:40,boxSizing:"border-box",cursor:"ns-resize",pointerEvents:"auto",background:"#fff",borderRadius:3,padding:"2px 3px"}} onMouseDown={handleLblDown} onMouseEnter={()=>setHovered(true)} onMouseLeave={()=>{if(!dotDragging&&!lblDragging)setHovered(false);}} title="Drag up/down to adjust stem height">
         {/* right-edge width resize handle */}
         <div onMouseDown={handleWidthDown} title="Drag to resize label width" style={{position:"absolute",top:0,bottom:0,right:-4,width:8,cursor:"ew-resize",zIndex:5,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={e=>e.stopPropagation()}>
           <div style={{width:2,height:14,borderRadius:1,background:"rgba(100,100,100,0.25)"}}/>
@@ -2705,45 +2687,46 @@ function App() {
     try { localStorage.setItem(LS_KEY,JSON.stringify(data)); } catch(e){}
   }
 
+  const [loadingMsg,setLoadingMsg]=useState("Loading session…");
+
   // Load state keyed by sessionId
   useEffect(()=>{
     if(!sessionId) return;
-    // Abort + fallback to localStorage after 6 s — handles Render free-tier cold starts
-    const ctrl=new AbortController();
-    const timer=setTimeout(()=>ctrl.abort(),6000);
+    setLoadingMsg("Loading session…");
+    const migrate=source=>{
+      if(!(source&&source.tabs&&source.tabs.length>0)) return null;
+      return {...source,tabs:source.tabs.map(t=>({...makeDefaultTab(""),... t,pyramid:{...makeDefaultPyramid(),...(t.pyramid||{})},initiatives:(t.initiatives||[]).map(i=>({owner:null,progress:null,blockName:null,...i}))}))};
+    };
     const applySource=(source)=>{
-      if(source&&source.tabs&&source.tabs.length>0){
-        const migrated=source.tabs.map(t=>({...makeDefaultTab(""),... t,pyramid:{...makeDefaultPyramid(),...(t.pyramid||{})},initiatives:(t.initiatives||[]).map(i=>({owner:null,progress:null,blockName:null,...i}))}));
-        setTabs(migrated);
-        setActiveTabId(source.activeTabId||migrated[0].id);
-        if(source.activeView) setActiveView(source.activeView);
-      } else {
-        const t=makeDefaultTab("Version 1");
-        setTabs([t]);setActiveTabId(t.id);
-      }
+      const m=migrate(source);
+      if(m){setTabs(m.tabs);setActiveTabId(m.activeTabId||m.tabs[0].id);if(m.activeView)setActiveView(m.activeView);}
+      else{const t=makeDefaultTab("Version 1");setTabs([t]);setActiveTabId(t.id);}
       setLoaded(true);
     };
-    // URL-encoded state takes priority (set by Save button)
-    const urlState=getEncodedStateFromHash();
-    if(urlState&&urlState.tabs&&urlState.tabs.length>0){
-      clearTimeout(timer); ctrl.abort();
-      applySource(urlState);
-      return;
-    }
+    // 1. Show localStorage immediately so the page is never blank for the current user
+    const local=loadFromLocalStorage();
+    if(local&&local.tabs&&local.tabs.length>0) applySource(local);
+    // 2. Fetch from API in background — this is what makes shared links work
+    //    Render free tier cold-starts in ~30 s, so we wait up to 35 s
+    const ctrl=new AbortController();
+    const slowTimer=setTimeout(()=>setLoadingMsg("Server waking up — may take ~30 s on first visit…"),5000);
+    const hardTimer=setTimeout(()=>ctrl.abort(),35000);
     fetch(`${API}/api/state`,{headers:{"x-session-id":sessionId},signal:ctrl.signal})
       .then(r=>r.ok?r.json():null)
       .then(data=>{
-        clearTimeout(timer);
-        applySource((data&&data.tabs&&data.tabs.length>0)?data:loadFromLocalStorage());
+        clearTimeout(slowTimer);clearTimeout(hardTimer);
+        if(data&&data.tabs&&data.tabs.length>0) applySource(data); // server wins (shared link)
+        else if(!(local&&local.tabs)) applySource(null); // nothing anywhere → blank default
       })
       .catch(()=>{
-        clearTimeout(timer);
-        applySource(loadFromLocalStorage());
+        clearTimeout(slowTimer);clearTimeout(hardTimer);
+        if(!(local&&local.tabs)) applySource(null);
       });
-    return()=>{clearTimeout(timer);ctrl.abort();};
+    return()=>{clearTimeout(slowTimer);clearTimeout(hardTimer);ctrl.abort();};
   },[sessionId]);
 
-  // Debounced save keyed by sessionId
+  // Debounced auto-save: localStorage immediately + API in background
+  // URL stays clean (#session=ID only — no state blob)
   useEffect(()=>{
     if(!loaded) return;
     if(saveTimer.current) clearTimeout(saveTimer.current);
@@ -2751,11 +2734,9 @@ function App() {
     saveTimer.current=setTimeout(()=>{
       const stateData={tabs,activeTabId,activeView};
       saveToLocalStorage(stateData);
-      // Always encode state into URL hash so the link is always shareable without a server
-      setHashWithState(sessionId,stateData);
+      setSessionInHash(sessionId); // keep URL short and clean
       setSaveStatus("saved");
       setTimeout(()=>setSaveStatus(""),2000);
-      // Best-effort API sync (Render free tier may be cold)
       fetch(`${API}/api/state`,{method:"POST",headers:{"Content-Type":"application/json","x-session-id":sessionId},body:JSON.stringify({state:stateData})}).catch(()=>{});
     },800);
     return()=>{if(saveTimer.current)clearTimeout(saveTimer.current);};
@@ -2768,7 +2749,7 @@ function App() {
     if(saveTimer.current) clearTimeout(saveTimer.current);
     const stateData={tabs,activeTabId,activeView};
     saveToLocalStorage(stateData);
-    setHashWithState(sessionId,stateData);
+    setSessionInHash(sessionId); // URL stays as #session=XXXX — short and shareable
     setSaveStatus("saving");
     fetch(`${API}/api/state`,{method:"POST",headers:{"Content-Type":"application/json","x-session-id":sessionId},body:JSON.stringify({state:stateData})})
       .then(()=>{setSaveStatus("saved");setTimeout(()=>setSaveStatus(""),2500);})
@@ -2793,7 +2774,13 @@ function App() {
     setTabs([t]);setActiveTabId(t.id);setLoaded(true);
   };
 
-  if(!loaded) return <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#888",fontSize:13}}>Loading…</div>;
+  if(!loaded) return (
+    <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"100vh",gap:14}}>
+      <div style={{width:28,height:28,border:"3px solid #e0e0e0",borderTopColor:"#FF0983",borderRadius:"50%",animation:"spin 0.8s linear infinite"}}/>
+      <div style={{fontSize:13,color:"#888",maxWidth:320,textAlign:"center",lineHeight:1.6}}>{loadingMsg}</div>
+      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+    </div>
+  );
 
   return (
     <div style={{display:"flex",flexDirection:"column",height:"100vh",width:"100vw",overflow:"hidden",fontFamily:"'Switzer','Inter',sans-serif"}}>
