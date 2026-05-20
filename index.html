@@ -70,8 +70,8 @@ const PROGRESS_OPTIONS = ["Not Started","On-track","Complete","Roadblock"];
 const PROGRESS_COLORS = {
   "Not Started":  { bg:"#f3f4f6", color:"#6b7280", dot:"#9ca3af" },
   "On-track":     { bg:"#d1fae5", color:"#065f46", dot:"#10b981" },
-  "Complete":     { bg:"#dbeafe", color:"#1e3a5f", dot:"#3b82f6" },
-  "Roadblock":    { bg:"#fee2e2", color:"#7f1d1d", dot:"#ef4444" },
+  "Complete":     { bg:"#dcfce7", color:"#14532d", dot:"#16a34a" },
+  "Roadblock":    { bg:"#fff7ed", color:"#9a3412", dot:"#f97316" },
 };
 
 // ── Session ID (sub-page) management ─────────────────────────────────────
@@ -327,7 +327,7 @@ const DISPLAY_FIELDS=[
 ];
 
 // ── Initiative Pin ─────────────────────────────────────────────────────────
-function InitiativePin({init,xPct,dotYPct,displayFields,fontSize,labelWidth,minM,maxM,onUpdateDate,onUpdateOffsetY,onUpdateDateAndOffset,onUpdateStemHeight,onUpdateLabelWidth,onRemoveFromMap}) {
+function InitiativePin({init,xPct,dotYPct,displayFields,fontSize,labelWidth,minM,maxM,onUpdateDate,onUpdateOffsetY,onUpdateDateAndOffset,onUpdateStemHeight,onUpdateLabelWidth,onRemoveFromMap,onUpdateProgress,onFocusInit}) {
   const [pinned,setPinned]=useState(false);
   const [hovered,setHovered]=useState(false);
   const [dotDragging,setDotDragging]=useState(false);
@@ -404,7 +404,7 @@ function InitiativePin({init,xPct,dotYPct,displayFields,fontSize,labelWidth,minM
 
   return (
     <div style={{position:"absolute",left:`${xPct}%`,top:`${dotYPct+OFFY}%`,transform:"translate(-50%,-50%)",zIndex:showTooltip||dotDragging?50:10,userSelect:"none"}}>
-      <div style={{position:"absolute",bottom:`calc(100% + ${STEM}px)`,left:"50%",transform:"translateX(-50%)",textAlign:"center",width:LWIDTH,maxWidth:LWIDTH,boxSizing:"border-box",cursor:"ns-resize",pointerEvents:"auto",background:"#fff",borderRadius:3,padding:"2px 3px"}} onMouseDown={handleLblDown} title="Drag up/down to adjust stem height">
+      <div style={{position:"absolute",bottom:`calc(100% + ${STEM}px)`,left:"50%",transform:"translateX(-50%)",textAlign:"center",width:LWIDTH,maxWidth:LWIDTH,boxSizing:"border-box",cursor:"ns-resize",pointerEvents:"auto",background:"#fff",borderRadius:3,padding:"2px 3px"}} onMouseDown={handleLblDown} onMouseEnter={()=>setHovered(true)} onMouseLeave={()=>{if(!dotDragging&&!lblDragging)setHovered(false);}} title="Drag up/down to adjust stem height">
         {/* right-edge width resize handle */}
         <div onMouseDown={handleWidthDown} title="Drag to resize label width" style={{position:"absolute",top:0,bottom:0,right:-4,width:8,cursor:"ew-resize",zIndex:5,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={e=>e.stopPropagation()}>
           <div style={{width:2,height:14,borderRadius:1,background:"rgba(100,100,100,0.25)"}}/>
@@ -421,7 +421,7 @@ function InitiativePin({init,xPct,dotYPct,displayFields,fontSize,labelWidth,minM
         {displayFields.includes("category")&&<span className="cat-badge" style={{background:color+"22",color,border:`1px solid ${color}55`,marginTop:2,display:"inline-block",fontSize:fs-2}}>{init.category}</span>}
       </div>
       <div style={{position:"absolute",bottom:"50%",left:"50%",transform:"translateX(-50%)",width:1.5,height:STEM,background:"rgba(20,20,20,0.55)",pointerEvents:"none"}}/>
-      <div ref={dotRef} style={{width:12,height:12,borderRadius:"50%",background:color,border:"2px solid white",boxShadow:`0 0 0 1.5px ${color}`,position:"relative",zIndex:2,cursor:dotDragging?"grabbing":"grab",transition:dotDragging?"none":"transform 0.15s",transform:showTooltip?"scale(1.5)":"scale(1)"}} onMouseEnter={()=>setHovered(true)} onMouseLeave={()=>{if(!dotDragging)setHovered(false);}} onMouseDown={handleDotDown} onClick={e=>{e.stopPropagation();if(!dotDragging)setPinned(p=>!p);}} title="Drag up/down · Click for details"/>
+      <div ref={dotRef} style={{width:12,height:12,borderRadius:"50%",background:color,border:"2px solid white",boxShadow:`0 0 0 1.5px ${color}`,position:"relative",zIndex:2,cursor:dotDragging?"grabbing":"grab",transition:dotDragging?"none":"transform 0.15s",transform:showTooltip?"scale(1.5)":"scale(1)"}} onMouseEnter={()=>setHovered(true)} onMouseLeave={()=>{if(!dotDragging)setHovered(false);}} onMouseDown={handleDotDown} onClick={e=>{e.stopPropagation();if(!dotDragging){setPinned(p=>!p);onFocusInit&&onFocusInit(init.id);}}} title="Drag up/down · Click for details"/>
       {showTooltip&&(
         <div ref={tooltipRef} style={{position:"absolute",top:"calc(100% + 12px)",left:"50%",transform:"translateX(-50%)",background:"#fff",border:"1px solid #eee",borderRadius:12,boxShadow:"0 8px 28px rgba(0,0,0,0.13)",padding:"12px 14px",minWidth:220,zIndex:100,textAlign:"left"}} onMouseEnter={()=>setHovered(true)} onMouseLeave={()=>setHovered(false)}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6}}>
@@ -435,7 +435,24 @@ function InitiativePin({init,xPct,dotYPct,displayFields,fontSize,labelWidth,minM
             {init.owner&&<span>Owner: {init.owner}</span>}
             {init.blockName&&<span>Block: {init.blockName}</span>}
           </div>
-          {init.progress&&<div style={{display:"inline-flex",alignItems:"center",gap:4,padding:"2px 8px",borderRadius:999,background:PROGRESS_COLORS[init.progress]?.bg,color:PROGRESS_COLORS[init.progress]?.color,fontSize:11,fontWeight:600,marginBottom:8}}><div style={{width:6,height:6,borderRadius:"50%",background:PROGRESS_COLORS[init.progress]?.dot}}/>{init.progress}</div>}
+          <div style={{marginBottom:8}}>
+            <div style={{fontSize:10,color:"#aaa",marginBottom:5}}>Progress</div>
+            <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+              {PROGRESS_OPTIONS.map(p=>{
+                const ps=PROGRESS_COLORS[p];
+                const active=init.progress===p;
+                return (
+                  <button key={p} onMouseDown={e=>e.stopPropagation()} onClick={e=>{e.stopPropagation();onUpdateProgress&&onUpdateProgress(active?null:p);}}
+                    style={{display:"flex",alignItems:"center",gap:4,padding:"3px 8px",borderRadius:999,fontSize:10,fontWeight:600,
+                      background:active?ps.bg:"#f9f9f9",color:active?ps.color:"#888",
+                      border:`1.5px solid ${active?ps.dot:"#e0e0e0"}`,cursor:"pointer",transition:"all .1s"}}>
+                    <div style={{width:6,height:6,borderRadius:"50%",background:ps.dot,flexShrink:0}}/>
+                    {p}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
           <div style={{borderTop:"1px solid #f0f0f0",paddingTop:8,display:"flex",flexDirection:"column",gap:6}}>
             <div>
               <div style={{fontSize:10,color:"#aaa",marginBottom:4}}>Reposition date:</div>
@@ -451,7 +468,7 @@ function InitiativePin({init,xPct,dotYPct,displayFields,fontSize,labelWidth,minM
 }
 
 // ── Momentum Canvas ────────────────────────────────────────────────────────
-function MomentumCanvas({initiatives,horizons,settings,displayFields,fontSize,labelWidth,draggingInit,onDrop,onUpdateInitiative}) {
+function MomentumCanvas({initiatives,horizons,settings,displayFields,fontSize,labelWidth,draggingInit,onDrop,onUpdateInitiative,onFocusInit}) {
   const outerRef=useRef(null);
   const canvasRef=useRef(null);
   const [dropXFrac,setDropXFrac]=useState(null);
@@ -542,7 +559,7 @@ function MomentumCanvas({initiatives,horizons,settings,displayFields,fontSize,la
             :null;
           const finalStem=stemOverride!==null?stemOverride:Math.max(20,baseStem+autoExtra);
           return (
-            <InitiativePin key={init.id} init={{...init,stemHeight:finalStem}} xPct={Math.max(2,Math.min(98,xFrac*100))} dotYPct={dotY} displayFields={displayFields} fontSize={fontSize} labelWidth={labelWidth} minM={minM} maxM={maxM} onUpdateDate={date=>onUpdateInitiative(init.id,{date})} onUpdateOffsetY={o=>onUpdateInitiative(init.id,{offsetY:o})} onUpdateDateAndOffset={(date,offsetY)=>onUpdateInitiative(init.id,{date,offsetY})} onUpdateStemHeight={h=>onUpdateInitiative(init.id,{stemHeight:h})} onUpdateLabelWidth={w=>onUpdateInitiative(init.id,{labelWidth:w})} onRemoveFromMap={()=>onUpdateInitiative(init.id,{onMap:false,offsetY:0})}/>
+            <InitiativePin key={init.id} init={{...init,stemHeight:finalStem}} xPct={Math.max(2,Math.min(98,xFrac*100))} dotYPct={dotY} displayFields={displayFields} fontSize={fontSize} labelWidth={labelWidth} minM={minM} maxM={maxM} onUpdateDate={date=>onUpdateInitiative(init.id,{date})} onUpdateOffsetY={o=>onUpdateInitiative(init.id,{offsetY:o})} onUpdateDateAndOffset={(date,offsetY)=>onUpdateInitiative(init.id,{date,offsetY})} onUpdateStemHeight={h=>onUpdateInitiative(init.id,{stemHeight:h})} onUpdateLabelWidth={w=>onUpdateInitiative(init.id,{labelWidth:w})} onRemoveFromMap={()=>onUpdateInitiative(init.id,{onMap:false,offsetY:0})} onUpdateProgress={p=>onUpdateInitiative(init.id,{progress:p})} onFocusInit={onFocusInit}/>
           );
         })}
       </div>
@@ -858,7 +875,13 @@ function buildWorkbook(initiatives) {
 }
 
 // ── Initiative Panel ─────────────────────────────────────────────────────────
-function InitiativePanel({initiatives,onAdd,onDelete,onUpdate,onDragStart,onDragEnd,pyramid,syncUrl,onSetSyncUrl,panelWidth,onPanelEdgeDown}) {
+function InitiativePanel({initiatives,onAdd,onDelete,onUpdate,onDragStart,onDragEnd,pyramid,syncUrl,onSetSyncUrl,panelWidth,onPanelEdgeDown,focusedInitId=null,onClearFocus}) {
+  const cardRefs=useRef({});
+  useEffect(()=>{
+    if(!focusedInitId) return;
+    const el=cardRefs.current[focusedInitId];
+    if(el) el.scrollIntoView({behavior:"smooth",block:"nearest"});
+  },[focusedInitId]);
   const [form,setForm]=useState({name:"",date:nowYYYYMM(),description:"",prize:"",category:"WIN",owner:"",progress:"",blockName:""});
   const [searchQuery,setSearchQuery]=useState("");
   const [filterCat,setFilterCat]=useState("ALL");
@@ -1161,7 +1184,12 @@ function InitiativePanel({initiatives,onAdd,onDelete,onUpdate,onDragStart,onDrag
       </div>
       {/* List */}
       <div style={{flex:1,overflowY:"auto",padding:"8px 10px",display:"flex",flexDirection:"column",gap:5}}>
-        {filtered.length===0?(<div style={{textAlign:"center",padding:"40px 20px",color:"#bbb"}}><div style={{fontSize:28,marginBottom:8}}>🎯</div><div style={{fontSize:12,fontWeight:500}}>No initiatives yet.</div><div style={{fontSize:11,marginTop:4}}>Add one above or drag to the map.</div></div>):(filtered.map(init=>(<InitiativeCard key={init.id} init={init} onDelete={onDelete} onUpdate={onUpdate} onDragStart={onDragStart} onDragEnd={onDragEnd} blockNames={blockNames} blockNamesByLayer={blockNamesByLayer}/>)))}
+        {filtered.length===0?(<div style={{textAlign:"center",padding:"40px 20px",color:"#bbb"}}><div style={{fontSize:28,marginBottom:8}}>🎯</div><div style={{fontSize:12,fontWeight:500}}>No initiatives yet.</div><div style={{fontSize:11,marginTop:4}}>Add one above or drag to the map.</div></div>):(filtered.map(init=>(
+          <div key={init.id} ref={el=>{if(el)cardRefs.current[init.id]=el;else delete cardRefs.current[init.id];}} style={{outline:focusedInitId===init.id?"2px solid #FF0983":"none",outlineOffset:"-2px",borderRadius:8,transition:"outline .15s"}}>
+            <InitiativeCard init={init} onDelete={onDelete} onUpdate={onUpdate} onDragStart={onDragStart} onDragEnd={onDragEnd} blockNames={blockNames} blockNamesByLayer={blockNamesByLayer}/>
+          </div>
+        )))}
+
       </div>
     </div>
   );
@@ -2280,6 +2308,190 @@ function TabBar({tabs,activeTabId,onSelectTab,onDuplicateTab,onRenameTab,onDelet
   );
 }
 
+// ── Editable Cell (used in tracker) ──────────────────────────────────────
+function EditableCell({value, onSave, placeholder="", style={}, multiline=false}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  useEffect(()=>setDraft(value),[value]);
+  const commit = () => { setEditing(false); if(draft!==value) onSave(draft); };
+  if(!editing) return (
+    <div onClick={()=>{setDraft(value);setEditing(true);}}
+      style={{cursor:"text",minHeight:18,color:value?"inherit":"#ccc",fontSize:"inherit",...style}}>
+      {value||placeholder}
+    </div>
+  );
+  if(multiline) return (
+    <textarea autoFocus value={draft} onChange={e=>setDraft(e.target.value)}
+      onBlur={commit} onKeyDown={e=>{if(e.key==="Escape")setEditing(false);}}
+      style={{fontSize:10,border:"1px solid #FF0983",borderRadius:4,padding:"2px 5px",outline:"none",resize:"vertical",minHeight:40,width:"100%",...style}}/>
+  );
+  return (
+    <input autoFocus value={draft} onChange={e=>setDraft(e.target.value)}
+      onBlur={commit} onKeyDown={e=>{if(e.key==="Enter")commit();if(e.key==="Escape")setEditing(false);}}
+      style={{fontSize:11,border:"1px solid #FF0983",borderRadius:4,padding:"2px 5px",outline:"none",width:"100%",...style}}/>
+  );
+}
+
+// ── Initiative Tracker View ───────────────────────────────────────────────
+function InitiativeTrackerView({initiatives, onUpdateInitiative, settings, onUpdateSettings}) {
+  const checkIns = settings.checkIns || [];
+  const [progPickerId, setProgPickerId] = useState(null);
+  const [addingCheckin, setAddingCheckin] = useState(false);
+  const [newCheckinLabel, setNewCheckinLabel] = useState("");
+
+  const addCheckIn = () => {
+    if(!newCheckinLabel.trim()) return;
+    const id = genId();
+    onUpdateSettings({checkIns:[...checkIns,{id,label:newCheckinLabel.trim()}]});
+    setNewCheckinLabel("");
+    setAddingCheckin(false);
+  };
+  const removeCheckIn = (cid) => {
+    onUpdateSettings({checkIns:checkIns.filter(c=>c.id!==cid)});
+  };
+  const updateNote = (initId, cid, note) => {
+    const init = initiatives.find(i=>i.id===initId);
+    if(!init) return;
+    const notes = {...(init.checkInNotes||{}),[cid]:note};
+    onUpdateInitiative(initId, {checkInNotes:notes});
+  };
+
+  const COL_STYLE = {fontSize:11,padding:"6px 8px",borderBottom:"1px solid #f0f0f0",verticalAlign:"middle"};
+  const HDR_STYLE = {fontSize:10,fontWeight:700,color:"#888",padding:"8px 8px",background:"#fafafa",position:"sticky",top:0,zIndex:2,borderBottom:"2px solid #e8e8e8",whiteSpace:"nowrap",textTransform:"uppercase",letterSpacing:"0.05em"};
+
+  const sorted = [...initiatives].sort((a,b)=>{
+    const order = {WIN:0,DIFF:1,COMPETE:2,OTHER:3};
+    return (order[a.category]??4)-(order[b.category]??4);
+  });
+
+  return (
+    <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:"#fff"}}>
+      <div style={{padding:"14px 20px 10px",borderBottom:"1px solid #eee",display:"flex",alignItems:"center",gap:10,flexShrink:0}}>
+        <span style={{fontSize:16,fontWeight:700,color:"#121212"}}>Initiative Tracker</span>
+        <span style={{fontSize:11,color:"#aaa"}}>{initiatives.length} initiative{initiatives.length!==1?"s":""}</span>
+      </div>
+      <div style={{flex:1,overflowY:"auto",overflowX:"auto"}}>
+        <table style={{width:"100%",borderCollapse:"collapse",tableLayout:"auto",minWidth:700}}>
+          <thead>
+            <tr>
+              <th style={{...HDR_STYLE,minWidth:160}}>Initiative</th>
+              <th style={{...HDR_STYLE,minWidth:72}}>Layer</th>
+              <th style={{...HDR_STYLE,minWidth:100}}>Owner</th>
+              <th style={{...HDR_STYLE,minWidth:80}}>Date</th>
+              <th style={{...HDR_STYLE,minWidth:60}}>Prize ($M)</th>
+              <th style={{...HDR_STYLE,minWidth:80}}>Progress</th>
+              <th style={{...HDR_STYLE,minWidth:100}}>Block</th>
+              {checkIns.map(ci=>(
+                <th key={ci.id} style={{...HDR_STYLE,minWidth:130,position:"sticky",top:0,zIndex:2}}>
+                  <div style={{display:"flex",alignItems:"center",gap:4}}>
+                    <span>{ci.label}</span>
+                    <button onClick={()=>removeCheckIn(ci.id)} style={{color:"#ccc",background:"none",border:"none",cursor:"pointer",padding:"0 2px",fontSize:12,lineHeight:1}} title="Remove column" onMouseEnter={e=>e.currentTarget.style.color="#ef4444"} onMouseLeave={e=>e.currentTarget.style.color="#ccc"}>×</button>
+                  </div>
+                </th>
+              ))}
+              <th style={{...HDR_STYLE,minWidth:80}}>
+                {addingCheckin?(
+                  <div style={{display:"flex",alignItems:"center",gap:4}}>
+                    <input autoFocus value={newCheckinLabel} onChange={e=>setNewCheckinLabel(e.target.value)}
+                      onKeyDown={e=>{if(e.key==="Enter")addCheckIn();if(e.key==="Escape"){setAddingCheckin(false);setNewCheckinLabel("");}}}
+                      placeholder="e.g. Apr 2025" style={{fontSize:10,border:"1px solid #FF0983",borderRadius:4,padding:"2px 5px",width:80,outline:"none"}}/>
+                    <button onClick={addCheckIn} style={{color:"#16a34a",background:"none",border:"none",cursor:"pointer",fontWeight:700,fontSize:13}}>✓</button>
+                    <button onClick={()=>{setAddingCheckin(false);setNewCheckinLabel("");}} style={{color:"#888",background:"none",border:"none",cursor:"pointer",fontSize:13}}>✕</button>
+                  </div>
+                ):(
+                  <button onClick={()=>setAddingCheckin(true)} style={{display:"flex",alignItems:"center",gap:3,color:"#aaa",background:"none",border:"1px dashed #ddd",borderRadius:5,padding:"3px 8px",cursor:"pointer",fontSize:10,fontWeight:600,whiteSpace:"nowrap"}} onMouseEnter={e=>e.currentTarget.style.borderColor="#FF0983"} onMouseLeave={e=>e.currentTarget.style.borderColor="#ddd"}>
+                    + Check-in
+                  </button>
+                )}
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((init,idx)=>{
+              const color = CAT_COLORS[init.category]||"#999";
+              const ps = init.progress ? PROGRESS_COLORS[init.progress] : null;
+              const isEven = idx%2===0;
+              const rowBg = isEven?"#fff":"#fafafa";
+              return (
+                <tr key={init.id} style={{background:rowBg}} onMouseEnter={e=>e.currentTarget.style.background="#f5f5ff"} onMouseLeave={e=>e.currentTarget.style.background=rowBg}>
+                  {/* Name */}
+                  <td style={{...COL_STYLE,fontWeight:600}}>
+                    <EditableCell value={init.name||""} onSave={v=>onUpdateInitiative(init.id,{name:v})} style={{fontWeight:600}}/>
+                  </td>
+                  {/* Category */}
+                  <td style={COL_STYLE}>
+                    <select value={init.category||"WIN"} onChange={e=>onUpdateInitiative(init.id,{category:e.target.value})}
+                      style={{fontSize:10,fontWeight:700,color,border:"none",background:"transparent",cursor:"pointer",outline:"none",padding:0}}>
+                      {CATEGORIES.map(c=><option key={c} value={c}>{c}</option>)}
+                    </select>
+                  </td>
+                  {/* Owner */}
+                  <td style={COL_STYLE}>
+                    <EditableCell value={init.owner||""} onSave={v=>onUpdateInitiative(init.id,{owner:v||null})} placeholder="—"/>
+                  </td>
+                  {/* Date */}
+                  <td style={COL_STYLE}>
+                    <input type="month" value={init.date||""} min={`${MIN_YEAR}-01`}
+                      onChange={e=>{const v=e.target.value;if(v&&v.length===7)onUpdateInitiative(init.id,{date:v});}}
+                      style={{fontSize:11,border:"none",background:"transparent",outline:"none",cursor:"pointer",color:"#555",padding:0}}/>
+                  </td>
+                  {/* Prize */}
+                  <td style={COL_STYLE}>
+                    <EditableCell value={init.prize!=null?String(init.prize):""} onSave={v=>onUpdateInitiative(init.id,{prize:v?parseFloat(v):null})} placeholder="—" style={{color:"#555"}}/>
+                  </td>
+                  {/* Progress dot */}
+                  <td style={{...COL_STYLE,position:"relative"}}>
+                    <div style={{position:"relative",display:"inline-block"}}>
+                      <div onClick={()=>setProgPickerId(progPickerId===init.id?null:init.id)}
+                        title={init.progress||"Set progress"}
+                        style={{width:14,height:14,borderRadius:"50%",background:ps?ps.dot:"#e0e0e0",cursor:"pointer",border:"2px solid white",boxShadow:`0 0 0 1.5px ${ps?ps.dot:"#d0d0d0"}`,transition:"transform .1s"}}
+                        onMouseEnter={e=>e.currentTarget.style.transform="scale(1.3)"} onMouseLeave={e=>e.currentTarget.style.transform="scale(1)"}/>
+                      {progPickerId===init.id&&(
+                        <div style={{position:"absolute",top:"calc(100% + 6px)",left:0,background:"#fff",border:"1px solid #eee",borderRadius:10,boxShadow:"0 6px 20px rgba(0,0,0,0.13)",padding:"8px",zIndex:100,minWidth:150}} onClick={e=>e.stopPropagation()}>
+                          {PROGRESS_OPTIONS.map(p=>{
+                            const pp=PROGRESS_COLORS[p];
+                            const active=init.progress===p;
+                            return(
+                              <button key={p} onClick={()=>{onUpdateInitiative(init.id,{progress:active?null:p});setProgPickerId(null);}}
+                                style={{display:"flex",alignItems:"center",gap:7,width:"100%",padding:"5px 8px",borderRadius:7,border:"none",background:active?pp.bg:"none",cursor:"pointer",textAlign:"left",fontSize:11,fontWeight:active?700:400,color:active?pp.color:"#555"}}
+                                onMouseEnter={e=>e.currentTarget.style.background=pp.bg} onMouseLeave={e=>e.currentTarget.style.background=active?pp.bg:"none"}>
+                                <div style={{width:8,height:8,borderRadius:"50%",background:pp.dot,flexShrink:0}}/>{p}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </td>
+                  {/* Block */}
+                  <td style={{...COL_STYLE,fontSize:10,color:"#888"}}>
+                    <EditableCell value={init.blockName||""} onSave={v=>onUpdateInitiative(init.id,{blockName:v||null})} placeholder="—"/>
+                  </td>
+                  {/* Check-in notes */}
+                  {checkIns.map(ci=>(
+                    <td key={ci.id} style={COL_STYLE}>
+                      <EditableCell value={(init.checkInNotes||{})[ci.id]||""} onSave={v=>updateNote(init.id,ci.id,v)} placeholder="Add note…" style={{color:"#555",fontSize:10}} multiline/>
+                    </td>
+                  ))}
+                  <td style={COL_STYLE}/>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        {initiatives.length===0&&(
+          <div style={{textAlign:"center",padding:"60px 20px",color:"#bbb"}}>
+            <div style={{fontSize:32,marginBottom:8}}>📋</div>
+            <div style={{fontSize:13,fontWeight:500}}>No initiatives yet.</div>
+            <div style={{fontSize:11,marginTop:4}}>Add initiatives in the Momentum Map view.</div>
+          </div>
+        )}
+      </div>
+      {progPickerId&&<div style={{position:"fixed",inset:0,zIndex:99}} onClick={()=>setProgPickerId(null)}/>}
+    </div>
+  );
+}
+
 // ── Top Bar (nav + session) ───────────────────────────────────────────────
 function TopBar({sessionId,activeView,onChangeView,onNew,saveStatus,onManualSave}) {
   const [copied,setCopied]=useState(false);
@@ -2326,6 +2538,7 @@ function TopBar({sessionId,activeView,onChangeView,onNew,saveStatus,onManualSave
     <div className="top-bar">
       <button className={`nav-tab${activeView==="strategy"?" active":""}`} onClick={()=>onChangeView("strategy")}>{IC.pyramid} Competitive Strategy</button>
       <button className={`nav-tab${activeView==="map"?" active":""}`} onClick={()=>onChangeView("map")}>{IC.map} Momentum Map</button>
+      <button className={`nav-tab${activeView==="tracker"?" active":""}`} onClick={()=>onChangeView("tracker")}>📋 Initiative Tracker</button>
       <div style={{flex:1}}/>
       {saveStatus&&<span className={`save-indicator${saveStatus?" "+saveStatus:""}`}>{saveStatus==="saving"?"Saving…":saveStatus==="saved"?"Saved ✓":""}</span>}
       <button onClick={onManualSave} style={{display:"flex",alignItems:"center",gap:5,fontSize:11,fontWeight:600,color:"#fff",background:"#121212",border:"none",borderRadius:6,padding:"4px 11px",cursor:"pointer",transition:"background .12s"}} onMouseEnter={e=>e.currentTarget.style.background="#333"} onMouseLeave={e=>e.currentTarget.style.background="#121212"} title="Save now and encode full state into the session link">
@@ -2352,6 +2565,7 @@ function MapView({tab,onUpdate,saveStatus}) {
   const {initiatives,horizons,settings,displayFields,fontSize,labelWidth,pyramid}=tab;
   const [draggingInit,setDraggingInit]=useState(null);
   const [panelWidth,setPanelWidth]=useState(310);
+  const [focusedInitId,setFocusedInitId]=useState(null);
   const panelDragRef=useRef({active:false,startX:0,startW:310});
 
   const handlePanelEdgeDown=useCallback(e=>{
@@ -2385,10 +2599,27 @@ function MapView({tab,onUpdate,saveStatus}) {
     <div style={{display:"flex",flex:1,minHeight:0,overflow:"hidden"}}>
       <div style={{flex:1,display:"flex",flexDirection:"column",minWidth:0,overflow:"hidden"}}>
         <SettingsBar settings={settings} horizons={horizons} displayFields={displayFields} fontSize={fontSize} saveStatus={saveStatus} onToggleField={toggleField} onUpdateSettings={d=>onUpdate({settings:{...settings,...d}})} onUpdateHorizons={h=>onUpdate({horizons:h})} onFontSizeChange={fs=>onUpdate({fontSize:fs})} labelWidth={labelWidth} onLabelWidthChange={w=>onUpdate({labelWidth:w})}/>
-        <MomentumCanvas initiatives={initiatives} horizons={horizons} settings={settings} displayFields={displayFields} fontSize={fontSize} labelWidth={labelWidth} draggingInit={draggingInit} onDrop={init=>updateInitiative(init.id,{onMap:true,offsetY:0})} onUpdateInitiative={updateInitiative}/>
+        <MomentumCanvas initiatives={initiatives} horizons={horizons} settings={settings} displayFields={displayFields} fontSize={fontSize} labelWidth={labelWidth} draggingInit={draggingInit} onDrop={init=>updateInitiative(init.id,{onMap:true,offsetY:0})} onUpdateInitiative={updateInitiative} onFocusInit={setFocusedInitId}/>
       </div>
-      <InitiativePanel initiatives={initiatives} onAdd={addInitiative} onDelete={deleteInitiative} onUpdate={updateInitiative} onDragStart={setDraggingInit} onDragEnd={()=>setDraggingInit(null)} pyramid={pyramid||makeDefaultPyramid()} syncUrl={tab.syncUrl||null} onSetSyncUrl={url=>onUpdate({syncUrl:url})} panelWidth={panelWidth} onPanelEdgeDown={handlePanelEdgeDown}/>
+      <InitiativePanel initiatives={initiatives} onAdd={addInitiative} onDelete={deleteInitiative} onUpdate={updateInitiative} onDragStart={setDraggingInit} onDragEnd={()=>setDraggingInit(null)} pyramid={pyramid||makeDefaultPyramid()} syncUrl={tab.syncUrl||null} onSetSyncUrl={url=>onUpdate({syncUrl:url})} panelWidth={panelWidth} onPanelEdgeDown={handlePanelEdgeDown} focusedInitId={focusedInitId} onClearFocus={()=>setFocusedInitId(null)}/>
     </div>
+  );
+}
+
+// ── Tracker Wrapper ───────────────────────────────────────────────────────
+function TrackerWrapper({tab, onUpdate}) {
+  const {initiatives, settings} = tab;
+  const updateInitiative = (id, changes) => {
+    onUpdate({initiatives: initiatives.map(i=>i.id===id?{...i,...changes}:i)});
+  };
+  const updateSettings = changes => onUpdate({settings:{...settings,...changes}});
+  return (
+    <InitiativeTrackerView
+      initiatives={initiatives}
+      onUpdateInitiative={updateInitiative}
+      settings={settings}
+      onUpdateSettings={updateSettings}
+    />
   );
 }
 
@@ -2512,6 +2743,8 @@ function App() {
         <div style={{flex:1,minWidth:0,display:"flex",flexDirection:"column",overflow:"hidden"}}>
           {activeView==="map"?(
             <MapView key={activeTabId} tab={activeTab} onUpdate={updateActiveTab} saveStatus={saveStatus}/>
+          ):activeView==="tracker"?(
+            <TrackerWrapper key={activeTabId} tab={activeTab} onUpdate={updateActiveTab}/>
           ):(
             <CompetitiveStrategyView pyramid={activeTab?.pyramid||makeDefaultPyramid()} onUpdatePyramid={changes=>updateActiveTab({pyramid:{...(activeTab?.pyramid||makeDefaultPyramid()),...changes}})} initiatives={activeTab?.initiatives||[]} settings={activeTab?.settings||{}}/>
           )}
