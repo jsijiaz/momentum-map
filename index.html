@@ -380,10 +380,14 @@ function InitiativePin({init,xPct,dotYPct,displayFields,fontSize,labelWidth,minM
     e.preventDefault(); e.stopPropagation();
     dragMovedRef.current=false;
     setDotDragging(true); setPinned(false);
-    // Use the INNER transformed canvas rect — it already encodes pan+zoom, so no manual /zoom needed
-    const rect=document.getElementById("momap-canvas")?.getBoundingClientRect();
-    // origOffset = current absolute Y% of the dot (already resolved by parent)
-    dotDragRef.current={y:e.clientY,x:e.clientX,origOffset:dotYPct,rect};
+    // Delta-based drag: measure from the dot's current position so there is no jump,
+    // and pan/zoom don't affect correctness.
+    // Use outer rect for W/H only — position doesn't matter since we work in deltas.
+    const outerEl=document.getElementById("momap-canvas-outer");
+    const outerRect=outerEl?.getBoundingClientRect();
+    const outerW=outerRect?.width||800;
+    const outerH=outerRect?.height||500;
+    dotDragRef.current={startX:e.clientX,startY:e.clientY,startXPct:xPct,origOffset:dotYPct,outerW,outerH};
     let finalDate=null, finalAbsY=null;
     const up=()=>{
       if(finalDate&&validateDate(finalDate)) onUpdateDate(finalDate);
@@ -393,20 +397,21 @@ function InitiativePin({init,xPct,dotYPct,displayFields,fontSize,labelWidth,minM
     };
     const mv=me=>{
       dragMovedRef.current=true;
-      const r=dotDragRef.current.rect; if(!r) return;
-      // X → date. r is the scaled canvas rect so xFrac is correct regardless of zoom/pan
+      const d=dotDragRef.current;
+      // X: screen-pixel delta → canvas natural fraction delta (divide by zoom so feel is 1:1)
+      const dxScreen=me.clientX-d.startX;
+      const newXFrac=Math.max(0,Math.min(1,d.startXPct/100+(dxScreen/(d.outerW*zoom))));
       if(minM!=null&&maxM!=null){
-        const xFrac=Math.max(0,Math.min(1,(me.clientX-r.left)/r.width));
-        finalDate=monthsToDate(Math.round(minM+xFrac*(maxM-minM)));
-        setLiveXPct(Math.max(2,Math.min(98,xFrac*100)));
+        finalDate=monthsToDate(Math.round(minM+newXFrac*(maxM-minM)));
+        setLiveXPct(Math.max(2,Math.min(98,newXFrac*100)));
       }
-      // Y → absolute canvas %. r.height is scaled so dyPx/r.height gives correct canvas %
-      const dyPx=me.clientY-dotDragRef.current.y;
-      finalAbsY=dotDragRef.current.origOffset+(r.height>0?(dyPx/r.height)*100:0);
+      // Y: screen-pixel delta → canvas % delta (divide by zoom for 1:1 feel)
+      const dyScreen=me.clientY-d.startY;
+      finalAbsY=d.origOffset+(dyScreen/(d.outerH*zoom))*100;
       setLiveOFFY(finalAbsY);
     };
     window.addEventListener("mousemove",mv); window.addEventListener("mouseup",up);
-  },[minM,maxM,dotYPct,zoom,onUpdateDate,onUpdateOffsetY]);
+  },[minM,maxM,xPct,dotYPct,zoom,onUpdateDate,onUpdateOffsetY]);
 
   const handleLblDown=useCallback(e=>{
     if(e.button!==0) return;
