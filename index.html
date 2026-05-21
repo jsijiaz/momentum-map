@@ -338,7 +338,7 @@ const DISPLAY_FIELDS=[
 ];
 
 // ── Initiative Pin ─────────────────────────────────────────────────────────
-function InitiativePin({init,xPct,xFrac,dotYPct,displayFields,fontSize,labelWidth,minM,maxM,zoom=1,onUpdateDate,onUpdateOffsetY,onUpdateDateAndOffset,onUpdateStemHeight,onUpdateLabelWidth,onRemoveFromMap,onUpdateProgress,onFocusInit,onUpdateZOrder}) {
+function InitiativePin({init,xPct,xFrac,dotYPct,displayFields,fontSize,labelWidth,minM,maxM,zoom=1,baseStem,onUpdateDate,onUpdateOffsetY,onUpdateDateAndOffset,onUpdateStemHeight,onUpdateLabelWidth,onRemoveFromMap,onUpdateProgress,onFocusInit,onUpdateZOrder}) {
   const [pinned,setPinned]=useState(false);
   const [hovered,setHovered]=useState(false);
   const [dotDragging,setDotDragging]=useState(false);
@@ -356,7 +356,13 @@ function InitiativePin({init,xPct,xFrac,dotYPct,displayFields,fontSize,labelWidt
   const tooltipRef=useRef(null);
   const dotRef=useRef(null);
   const color=CAT_COLORS[init.category]||"#A4A09F";
+  // Visual stem (already augmented with autoExtra/groupBy override from parent).
+  // We render with this so the line length matches what the user sees.
   const STEM=typeof init.stemHeight==="number"?init.stemHeight:65;
+  // Authoring stem (the raw value persisted on the initiative, BEFORE auto-stagger).
+  // We drag and commit against this so dragging doesn't double-count auto-stagger
+  // (which previously caused the label to jump and get stuck at extreme heights).
+  const AUTHOR_STEM=typeof baseStem==="number"?baseStem:STEM;
   const OFFY=typeof init.offsetY==="number"?init.offsetY:0;
   const LWIDTH=typeof init.labelWidth==="number"?init.labelWidth:(labelWidth||200);
   const fs=fontSize||11;
@@ -428,8 +434,10 @@ function InitiativePin({init,xPct,xFrac,dotYPct,displayFields,fontSize,labelWidt
     if(e.button!==0) return;
     e.preventDefault(); e.stopPropagation();
     setLblDragging(true);
-    lblDragRef.current={y:e.clientY,x:e.clientX,origStem:STEM,origW:LWIDTH,axis:null};
-    let finalStem=STEM, finalW=LWIDTH;
+    // Use AUTHOR_STEM (raw, un-augmented) as the drag origin so committing back
+    // doesn't re-apply auto-stagger. visualDelta tracks the screen delta we want.
+    lblDragRef.current={y:e.clientY,x:e.clientX,origAuthorStem:AUTHOR_STEM,origVisualStem:STEM,origW:LWIDTH,axis:null};
+    let finalStem=AUTHOR_STEM, finalW=LWIDTH;
     const up=()=>{
       if(lblDragRef.current.axis==="y") onUpdateStemHeight(finalStem);
       else if(lblDragRef.current.axis==="x" && onUpdateLabelWidth) onUpdateLabelWidth(finalW);
@@ -449,8 +457,11 @@ function InitiativePin({init,xPct,xFrac,dotYPct,displayFields,fontSize,labelWidt
       if(lblDragRef.current.axis==="y"){
         // Vertical: drag up = longer stem (higher label); divide by zoom for 1:1 feel
         const dy=dyRaw/zoom;
-        finalStem=Math.max(20,Math.min(2000,lblDragRef.current.origStem+dy));
-        setLiveStem(finalStem);
+        // Commit value = raw authored stem + dy (no auto-stagger baked in)
+        finalStem=Math.max(20,Math.min(2000,lblDragRef.current.origAuthorStem+dy));
+        // Live visual = current rendered stem + dy (matches mouse exactly during drag)
+        const liveVisual=Math.max(20,Math.min(2000,lblDragRef.current.origVisualStem+dy));
+        setLiveStem(liveVisual);
       } else {
         // Horizontal: drag right = wider label
         const dx=dxRaw/zoom;
@@ -459,7 +470,7 @@ function InitiativePin({init,xPct,xFrac,dotYPct,displayFields,fontSize,labelWidt
       }
     };
     window.addEventListener("mousemove",mv); window.addEventListener("mouseup",up);
-  },[STEM,LWIDTH,zoom,onUpdateStemHeight,onUpdateLabelWidth]);
+  },[STEM,AUTHOR_STEM,LWIDTH,zoom,onUpdateStemHeight,onUpdateLabelWidth]);
 
   const handleWidthDown=useCallback(e=>{
     if(e.button!==0) return;
@@ -695,7 +706,7 @@ function MomentumCanvas({initiatives,horizons,settings,displayFields,fontSize,la
               :null;
             const finalStem=stemOverride!==null?stemOverride:Math.max(20,baseStem+autoExtra);
             return (
-              <InitiativePin key={init.id} init={{...init,stemHeight:finalStem}} xPct={Math.max(2,Math.min(98,xFrac*100))} xFrac={xFrac} dotYPct={dotY} displayFields={displayFields} fontSize={fontSize} labelWidth={labelWidth} minM={minM} maxM={maxM} zoom={zoom} onUpdateDate={date=>onUpdateInitiative(init.id,{date})} onUpdateOffsetY={o=>onUpdateInitiative(init.id,{offsetY:o})} onUpdateDateAndOffset={(date,offsetY)=>onUpdateInitiative(init.id,{date,offsetY})} onUpdateStemHeight={h=>onUpdateInitiative(init.id,{stemHeight:h})} onUpdateLabelWidth={w=>onUpdateInitiative(init.id,{labelWidth:w})} onRemoveFromMap={()=>onUpdateInitiative(init.id,{onMap:false,offsetY:undefined})} onUpdateProgress={p=>onUpdateInitiative(init.id,{progress:p})} onFocusInit={onFocusInit} onUpdateZOrder={action=>updateZ(init.id,action)}/>
+              <InitiativePin key={init.id} init={{...init,stemHeight:finalStem}} baseStem={baseStem} xPct={Math.max(2,Math.min(98,xFrac*100))} xFrac={xFrac} dotYPct={dotY} displayFields={displayFields} fontSize={fontSize} labelWidth={labelWidth} minM={minM} maxM={maxM} zoom={zoom} onUpdateDate={date=>onUpdateInitiative(init.id,{date})} onUpdateOffsetY={o=>onUpdateInitiative(init.id,{offsetY:o})} onUpdateDateAndOffset={(date,offsetY)=>onUpdateInitiative(init.id,{date,offsetY})} onUpdateStemHeight={h=>onUpdateInitiative(init.id,{stemHeight:h})} onUpdateLabelWidth={w=>onUpdateInitiative(init.id,{labelWidth:w})} onRemoveFromMap={()=>onUpdateInitiative(init.id,{onMap:false,offsetY:undefined})} onUpdateProgress={p=>onUpdateInitiative(init.id,{progress:p})} onFocusInit={onFocusInit} onUpdateZOrder={action=>updateZ(init.id,action)}/>
             );
           });
         })()}
