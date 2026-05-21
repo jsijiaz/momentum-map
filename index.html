@@ -42,6 +42,7 @@
     .tab-add { color:#aaa; padding:0 6px; height:28px; font-size:16px; display:flex; align-items:center; }
     .tab-add:hover { color:#555; }
     .save-indicator { font-size:10px; color:#bbb; padding:2px 6px; border-radius:4px; }
+    .horizon-label-group:hover .horizon-drag-handle { opacity: 1 !important; }
     .save-indicator.saving { color:#FF0983; }
     .save-indicator.saved { color:#22c55e; }
     /* Top bar */
@@ -66,6 +67,10 @@ const MONTHS_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct
 const MONTHS_FULL = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 const BG_OFFSET_PX = 125;
 const BG_BOTTOM_OFFSET = 65; // 40px horizon bar + 25px gap above it
+// Horizon bracket+label is moved this many px above canvas bottom so it sits
+// closer to the pink curve. axisYPct and the divider "bottom" stop are derived
+// from this value so they all move together.
+const HORIZON_BAR_BOTTOM = 26;
 const MIN_YEAR = 2020;
 const PYRAMID_LAYERS = ["WIN","DIFF","COMPETE","FOUNDATION"];
 const RYG_COLORS = { R:"#ef4444", Y:"#f59e0b", G:"#22c55e" };
@@ -338,7 +343,7 @@ const DISPLAY_FIELDS=[
 ];
 
 // ── Initiative Pin ─────────────────────────────────────────────────────────
-function InitiativePin({init,xPct,xFrac,dotYPct,displayFields,fontSize,labelWidth,minM,maxM,zoom=1,baseStem,onUpdateDate,onUpdateOffsetY,onUpdateDateAndOffset,onUpdateStemHeight,onUpdateLabelWidth,onRemoveFromMap,onUpdateProgress,onFocusInit,onUpdateZOrder}) {
+function InitiativePin({init,xPct,xFrac,dotYPct,displayFields,fontSize,labelWidth,minM,maxM,zoom=1,baseStem,autoZIndex,onUpdateDate,onUpdateOffsetY,onUpdateDateAndOffset,onUpdateStemHeight,onUpdateLabelWidth,onRemoveFromMap,onUpdateProgress,onFocusInit}) {
   const [pinned,setPinned]=useState(false);
   const [hovered,setHovered]=useState(false);
   const [dotDragging,setDotDragging]=useState(false);
@@ -496,11 +501,10 @@ function InitiativePin({init,xPct,xFrac,dotYPct,displayFields,fontSize,labelWidt
   const showTooltip=pinned&&!anyDrag;
   // Dot grows on hover or when pinned — separately from card visibility
   const dotScaleUp=(hovered||pinned)&&!dotDragging;
-  // Layering: pinned/dragging always front; otherwise honor user-set zOrder (default 10),
-  // with a small bump on hover so the hovered pin sits just above its siblings.
-  // Map fractional zOrders (e.g. 10.5) to integers by multiplying ×10 — z-index must be int.
-  const userZ=Math.round((typeof init.zOrder==="number"?init.zOrder:10)*10)+1000;
-  const zIdx=pinned||anyDrag?99999:hovered?Math.max(userZ,3000):userZ;
+  // Layering: pinned/dragging always front; otherwise use the auto-computed zIndex
+  // (taller stem = lower z = behind shorter labels). Hovered pin pops above siblings.
+  const baseZ=typeof autoZIndex==="number"?autoZIndex:1000;
+  const zIdx=pinned||anyDrag?99999:hovered?Math.max(baseZ,3000):baseZ;
 
   // Minimal white pill behind each text row — hugs the text only.
   const textBg={background:"#fff",padding:"0 4px",borderRadius:2,boxDecorationBreak:"clone",WebkitBoxDecorationBreak:"clone"};
@@ -561,17 +565,6 @@ function InitiativePin({init,xPct,xFrac,dotYPct,displayFields,fontSize,labelWidt
               <div style={{fontSize:10,color:"#aaa",marginBottom:4}}>Reposition date:</div>
               <input type="month" defaultValue={init.date} min={`${MIN_YEAR}-01`} style={{fontSize:12,border:"1px solid #e5e5e5",borderRadius:6,padding:"4px 8px",width:"100%",outline:"none"}} onChange={e=>{const v=e.target.value;if(v&&v.length===7&&parseInt(v.split("-")[0])>=MIN_YEAR)onUpdateDate(v);}} onMouseDown={e=>e.stopPropagation()} onFocus={e=>e.target.style.borderColor="#FF0983"} onBlur={e=>e.target.style.borderColor="#e5e5e5"}/>
             </div>
-            {onUpdateZOrder&&(
-              <div>
-                <div style={{fontSize:10,color:"#aaa",marginBottom:4}}>Layer order:</div>
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:4}}>
-                  <button onMouseDown={e=>e.stopPropagation()} onClick={e=>{e.stopPropagation();onUpdateZOrder("front");}} title="Bring to front" style={{fontSize:10,fontWeight:600,color:"#444",border:"1px solid #e5e5e5",borderRadius:6,padding:"4px 6px",background:"#fff",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:4}} onMouseEnter={e=>{e.currentTarget.style.background="#f5f5f5";}} onMouseLeave={e=>{e.currentTarget.style.background="#fff";}}>⯇⯇ To Front</button>
-                  <button onMouseDown={e=>e.stopPropagation()} onClick={e=>{e.stopPropagation();onUpdateZOrder("forward");}} title="Bring forward one step" style={{fontSize:10,fontWeight:600,color:"#444",border:"1px solid #e5e5e5",borderRadius:6,padding:"4px 6px",background:"#fff",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:4}} onMouseEnter={e=>{e.currentTarget.style.background="#f5f5f5";}} onMouseLeave={e=>{e.currentTarget.style.background="#fff";}}>⯇ Forward</button>
-                  <button onMouseDown={e=>e.stopPropagation()} onClick={e=>{e.stopPropagation();onUpdateZOrder("backward");}} title="Send backward one step" style={{fontSize:10,fontWeight:600,color:"#444",border:"1px solid #e5e5e5",borderRadius:6,padding:"4px 6px",background:"#fff",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:4}} onMouseEnter={e=>{e.currentTarget.style.background="#f5f5f5";}} onMouseLeave={e=>{e.currentTarget.style.background="#fff";}}>Backward ⯈</button>
-                  <button onMouseDown={e=>e.stopPropagation()} onClick={e=>{e.stopPropagation();onUpdateZOrder("back");}} title="Send to back" style={{fontSize:10,fontWeight:600,color:"#444",border:"1px solid #e5e5e5",borderRadius:6,padding:"4px 6px",background:"#fff",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:4}} onMouseEnter={e=>{e.currentTarget.style.background="#f5f5f5";}} onMouseLeave={e=>{e.currentTarget.style.background="#fff";}}>To Back ⯈⯈</button>
-                </div>
-              </div>
-            )}
             <button onMouseDown={e=>e.stopPropagation()} onClick={e=>{e.stopPropagation();setPinned(false);onRemoveFromMap();}} style={{fontSize:10,color:"#888",border:"1px solid #e5e5e5",borderRadius:6,padding:"4px 8px",background:"#fff",cursor:"pointer",textAlign:"center"}} onMouseEnter={e=>{e.currentTarget.style.background="#fff5f5";e.currentTarget.style.color="#c00";}} onMouseLeave={e=>{e.currentTarget.style.background="#fff";e.currentTarget.style.color="#888";}}>Remove from map</button>
           </div>
           {pinned&&<div style={{fontSize:10,color:"#bbb",marginTop:8,textAlign:"center"}}>Click outside to close</div>}
@@ -582,7 +575,7 @@ function InitiativePin({init,xPct,xFrac,dotYPct,displayFields,fontSize,labelWidt
 }
 
 // ── Momentum Canvas ────────────────────────────────────────────────────────
-function MomentumCanvas({initiatives,horizons,settings,displayFields,fontSize,labelWidth,draggingInit,onDrop,onUpdateInitiative,onFocusInit}) {
+function MomentumCanvas({initiatives,horizons,settings,displayFields,fontSize,labelWidth,draggingInit,onDrop,onUpdateInitiative,onUpdateSettings,onFocusInit}) {
   const outerRef=useRef(null);
   const canvasRef=useRef(null);
   const [dropXFrac,setDropXFrac]=useState(null);
@@ -635,7 +628,7 @@ function MomentumCanvas({initiatives,horizons,settings,displayFields,fontSize,la
       <div id="momap-canvas" ref={canvasRef} style={{position:"absolute",inset:0,transformOrigin:"0 0",transform:`translate(${panX}px,${panY}px) scale(${zoom})`,background:"#fff",overflow:"visible"}} onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();setDropXFrac(null);if(!draggingInit)return;onDrop(draggingInit);}}>
         <img src={BG_URL} alt="" aria-hidden="true" crossOrigin="anonymous" style={{position:"absolute",left:0,right:0,top:BG_OFFSET_PX,width:"100%",height:`calc(100% - ${BG_OFFSET_PX+BG_BOTTOM_OFFSET}px)`,objectFit:"fill",pointerEvents:"none",userSelect:"none",display:"block"}} draggable={false}/>
         {/* Month gridlines */}
-        {settings?.showMonthLines&&(()=>{const lines=[];const totalM=maxM-minM;if(totalM>0&&totalM<=120){for(let m=Math.ceil(minM);m<maxM;m++){const xf=(m-minM)/(maxM-minM);const isYearBoundary=m%12===0;lines.push(<div key={m} style={{position:"absolute",top:0,bottom:40,left:`${xf*100}%`,borderLeft:`1px solid rgba(0,0,0,${isYearBoundary?0.10:0.05})`,pointerEvents:"none"}}/>);if(isYearBoundary){const yr=Math.floor(m/12);lines.push(<div key={`yr${m}`} style={{position:"absolute",bottom:44,left:`${xf*100}%`,transform:"translateX(-50%)",fontSize:8,color:"rgba(0,0,0,0.25)",pointerEvents:"none",whiteSpace:"nowrap",fontWeight:600}}>{yr}</div>);}}}return lines;})()}
+        {settings?.showMonthLines&&(()=>{const lines=[];const totalM=maxM-minM;if(totalM>0&&totalM<=120){for(let m=Math.ceil(minM);m<maxM;m++){const xf=(m-minM)/(maxM-minM);const isYearBoundary=m%12===0;lines.push(<div key={m} style={{position:"absolute",top:0,bottom:HORIZON_BAR_BOTTOM+40,left:`${xf*100}%`,borderLeft:`1px solid rgba(0,0,0,${isYearBoundary?0.10:0.05})`,pointerEvents:"none"}}/>);if(isYearBoundary){const yr=Math.floor(m/12);lines.push(<div key={`yr${m}`} style={{position:"absolute",bottom:HORIZON_BAR_BOTTOM+44,left:`${xf*100}%`,transform:"translateX(-50%)",fontSize:8,color:"rgba(0,0,0,0.25)",pointerEvents:"none",whiteSpace:"nowrap",fontWeight:600}}>{yr}</div>);}}}return lines;})()}
         {/* Layer grouping bands */}
         {settings?.groupByLayer&&(()=>{
           const bands=[{cat:"WIN",center:27,h:18},{cat:"DIFF",center:46,h:18},{cat:"COMPETE",center:65,h:18},{cat:"OTHER",center:82,h:14}];
@@ -645,50 +638,99 @@ function MomentumCanvas({initiatives,horizons,settings,displayFields,fontSize,la
             </div>
           ));
         })()}
-        {dividers.map((xFrac,i)=>(
-          <div key={i} style={{position:"absolute",top:0,bottom:40,left:`${xFrac*100}%`,borderLeft:"1.5px dashed rgba(30,30,30,0.28)",pointerEvents:"none"}}/>
-        ))}
+        {(()=>{
+          // Extend dividers up to the height of the tallest visible label, so the
+          // dotted line always reaches at least to the top of the tallest pin.
+          const visForDiv=initiatives.filter(i=>i.onMap&&!(settings?.hiddenLayers||[]).includes(i.category));
+          let maxStem=80; // floor so dividers always extend above the bracket
+          visForDiv.forEach(i=>{
+            const s=typeof i.stemHeight==="number"?i.stemHeight:65;
+            const extra=(staggerOffsets[i.id]||0)*3;
+            const total=Math.max(20,s+extra);
+            if(total>maxStem) maxStem=total;
+          });
+          const labelTopFromBottom=HORIZON_BAR_BOTTOM+28+maxStem+30;
+          const divBottom=HORIZON_BAR_BOTTOM+24; // just above the tick line
+          const dividerOffsets=settings?.horizonDividerOffsets||{};
+          const startDivDrag=(idx,e,curOffset)=>{
+            e.preventDefault();e.stopPropagation();
+            const startY=e.clientY;
+            const move=ev=>{
+              // dragging up extends the line → positive extra
+              const dy=startY-ev.clientY;
+              const next=Math.max(-200,Math.min(1500,curOffset+dy));
+              if(onUpdateSettings){
+                onUpdateSettings({horizonDividerOffsets:{...(settings?.horizonDividerOffsets||{}),[idx]:next}});
+              }
+            };
+            const up=()=>{window.removeEventListener("mousemove",move);window.removeEventListener("mouseup",up);};
+            window.addEventListener("mousemove",move);window.addEventListener("mouseup",up);
+          };
+          return dividers.map((xFrac,i)=>{
+            const extra=Number(dividerOffsets[i])||0;
+            // Base auto-fit top, then apply user's extra extension upward (extra px = move top up that many px)
+            const autoTopPx=canvasHeight-labelTopFromBottom;
+            const divTop=Math.min(autoTopPx,0)-extra; // allow going above canvas; extra > 0 pulls top further up
+            return (
+              <React.Fragment key={i}>
+                <div style={{position:"absolute",top:divTop,bottom:divBottom,left:`${xFrac*100}%`,borderLeft:"1.5px dashed rgba(30,30,30,0.28)",pointerEvents:"none"}}/>
+                <div title="Drag to adjust divider length" onMouseDown={e=>startDivDrag(i,e,extra)} style={{position:"absolute",top:divTop-6,left:`${xFrac*100}%`,transform:"translateX(-50%)",width:14,height:14,borderRadius:"50%",background:"#fff",border:"1.5px solid rgba(30,30,30,0.45)",cursor:"ns-resize",pointerEvents:"auto",display:"flex",alignItems:"center",justifyContent:"center",zIndex:50,boxShadow:"0 1px 3px rgba(0,0,0,0.15)"}}>
+                  <div style={{width:6,height:1,background:"rgba(30,30,30,0.55)"}}/>
+                </div>
+              </React.Fragment>
+            );
+          });
+        })()}
         {sorted.map(h=>{
           const sFrac=(dateToMonths(h.startDate)-minM)/(maxM-minM);
           const eFrac=(dateToMonths(horizonEndDate(h))-minM)/(maxM-minM);
           const wPct=(eFrac-sFrac)*100;
+          const labelOffsets=settings?.horizonLabelOffsets||{};
+          const lift=Number(labelOffsets[h.id])||0; // px to lift the whole label/bracket above its default
+          const startLabelDrag=(e,curLift)=>{
+            e.preventDefault();e.stopPropagation();
+            const startY=e.clientY;
+            const move=ev=>{
+              const dy=startY-ev.clientY; // up = positive
+              const next=Math.max(-40,Math.min(800,curLift+dy));
+              if(onUpdateSettings){
+                onUpdateSettings({horizonLabelOffsets:{...(settings?.horizonLabelOffsets||{}),[h.id]:next}});
+              }
+            };
+            const up=()=>{window.removeEventListener("mousemove",move);window.removeEventListener("mouseup",up);};
+            window.addEventListener("mousemove",move);window.addEventListener("mouseup",up);
+          };
           return (
-            <div key={h.id} style={{position:"absolute",bottom:0,left:`${sFrac*100}%`,width:`${wPct}%`,display:"flex",flexDirection:"column",alignItems:"center",paddingBottom:8,pointerEvents:"none"}}>
+            <div key={h.id} style={{position:"absolute",bottom:HORIZON_BAR_BOTTOM+lift,left:`${sFrac*100}%`,width:`${wPct}%`,display:"flex",flexDirection:"column",alignItems:"center",paddingBottom:8,pointerEvents:"none"}}>
               <div style={{position:"relative",width:"100%",height:18}}><div style={{position:"absolute",bottom:0,left:10,right:10,height:1,background:"#aaa"}}/><div style={{position:"absolute",bottom:0,left:10,width:1,height:6,background:"#aaa"}}/><div style={{position:"absolute",bottom:0,right:10,width:1,height:6,background:"#aaa"}}/></div>
-              <div style={{fontSize:11,marginTop:3,textAlign:"center",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:"96%",fontWeight:700}}>{h.label}</div>
+              <div className="horizon-label-group" style={{position:"relative",display:"flex",alignItems:"center",justifyContent:"center",marginTop:3,maxWidth:"96%",pointerEvents:"auto"}}>
+                <div style={{fontSize:11,textAlign:"center",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",fontWeight:700,padding:"0 4px"}}>{h.label}</div>
+                <div className="horizon-drag-handle" title="Drag to adjust label height" onMouseDown={e=>startLabelDrag(e,lift)} style={{position:"absolute",left:"100%",marginLeft:6,top:"50%",transform:"translateY(-50%)",width:14,height:14,borderRadius:"50%",background:"#fff",border:"1.5px solid rgba(30,30,30,0.45)",cursor:"ns-resize",pointerEvents:"auto",display:"flex",alignItems:"center",justifyContent:"center",opacity:0,transition:"opacity 0.15s",boxShadow:"0 1px 3px rgba(0,0,0,0.15)"}}>
+                  <div style={{display:"flex",flexDirection:"column",gap:1}}><div style={{width:6,height:1,background:"rgba(30,30,30,0.55)"}}/><div style={{width:6,height:1,background:"rgba(30,30,30,0.55)"}}/></div>
+                </div>
+              </div>
             </div>
           );
         })}
         {dropXFrac!=null&&draggingInit&&<div style={{position:"absolute",top:0,bottom:0,left:`${dropXFrac*100}%`,width:2,background:"#FF0983",opacity:0.6,pointerEvents:"none"}}/>}
         {(()=>{
           const visible=initiatives.filter(i=>i.onMap&&!(settings?.hiddenLayers||[]).includes(i.category));
-          // Render in zOrder ascending so DOM order matches stacking (z-index also applied per pin).
-          const ordered=[...visible].sort((a,b)=>(typeof a.zOrder==="number"?a.zOrder:10)-(typeof b.zOrder==="number"?b.zOrder:10));
-          // Helpers to bring forward / back / one step.
-          const zValues=visible.map(i=>typeof i.zOrder==="number"?i.zOrder:10);
-          const maxZ=zValues.length?Math.max(...zValues):10;
-          const minZ=zValues.length?Math.min(...zValues):10;
-          const updateZ=(initId,action)=>{
-            const me=visible.find(i=>i.id===initId); if(!me) return;
-            const myZ=typeof me.zOrder==="number"?me.zOrder:10;
-            if(action==="front") onUpdateInitiative(initId,{zOrder:maxZ+1});
-            else if(action==="back") onUpdateInitiative(initId,{zOrder:minZ-1});
-            else if(action==="forward"){
-              // Find next pin strictly above me; swap z just above it.
-              const above=ordered.filter(i=>i.id!==initId&&((typeof i.zOrder==="number"?i.zOrder:10)>myZ));
-              if(above.length){const nextZ=(typeof above[0].zOrder==="number"?above[0].zOrder:10);onUpdateInitiative(initId,{zOrder:nextZ+0.5});}
-              else onUpdateInitiative(initId,{zOrder:maxZ+1});
-            } else if(action==="backward"){
-              const below=ordered.filter(i=>i.id!==initId&&((typeof i.zOrder==="number"?i.zOrder:10)<myZ)).reverse();
-              if(below.length){const prevZ=(typeof below[0].zOrder==="number"?below[0].zOrder:10);onUpdateInitiative(initId,{zOrder:prevZ-0.5});}
-              else onUpdateInitiative(initId,{zOrder:minZ-1});
-            }
+          // Auto-stack: taller stems sit BEHIND shorter ones so the short labels never get
+          // hidden by a tall neighbor. We render in descending stem order (tallest first =
+          // back of the DOM stack) and assign matching z-index per pin (taller = lower z).
+          const stemOf=(i)=>{
+            const base=typeof i.stemHeight==="number"?i.stemHeight:65;
+            return base; // ignore auto-stagger; it doesn't change perceived label height much
           };
+          const ordered=[...visible].sort((a,b)=>stemOf(b)-stemOf(a));
+          // Map each id -> rank (0 = tallest/back, n-1 = shortest/front)
+          const stemRank={};
+          ordered.forEach((init,idx)=>{stemRank[init.id]=idx;});
           // Y position of the horizon x-axis bar (where dates are labeled), in canvas %.
-          // The horizon bar sits at bottom:0 with paddingBottom:8 + an 18px tick row,
-          // so the tick line itself is ~26px above the canvas bottom. Place the dot a
-          // few px above the tick line so it sits ON the axis, not below the labels.
-          const axisYPct=canvasHeight>0?((canvasHeight-28)/canvasHeight)*100:95;
+          // The horizon bar now sits at bottom:HORIZON_BAR_BOTTOM with paddingBottom:8
+          // + an 18px tick row, so the tick line itself is ~26px above HORIZON_BAR_BOTTOM.
+          // Place the dot a few px above the tick line so it sits ON the axis.
+          const axisYPct=canvasHeight>0?((canvasHeight-HORIZON_BAR_BOTTOM-28)/canvasHeight)*100:95;
           return ordered.map(init=>{
             const xFrac=dateToX(init.date,minM,maxM);
             // curveY = default position on the curve
@@ -706,7 +748,7 @@ function MomentumCanvas({initiatives,horizons,settings,displayFields,fontSize,la
               :null;
             const finalStem=stemOverride!==null?stemOverride:Math.max(20,baseStem+autoExtra);
             return (
-              <InitiativePin key={init.id} init={{...init,stemHeight:finalStem}} baseStem={baseStem} xPct={Math.max(2,Math.min(98,xFrac*100))} xFrac={xFrac} dotYPct={dotY} displayFields={displayFields} fontSize={fontSize} labelWidth={labelWidth} minM={minM} maxM={maxM} zoom={zoom} onUpdateDate={date=>onUpdateInitiative(init.id,{date})} onUpdateOffsetY={o=>onUpdateInitiative(init.id,{offsetY:o})} onUpdateDateAndOffset={(date,offsetY)=>onUpdateInitiative(init.id,{date,offsetY})} onUpdateStemHeight={h=>onUpdateInitiative(init.id,{stemHeight:h})} onUpdateLabelWidth={w=>onUpdateInitiative(init.id,{labelWidth:w})} onRemoveFromMap={()=>onUpdateInitiative(init.id,{onMap:false,offsetY:undefined})} onUpdateProgress={p=>onUpdateInitiative(init.id,{progress:p})} onFocusInit={onFocusInit} onUpdateZOrder={action=>updateZ(init.id,action)}/>
+              <InitiativePin key={init.id} init={{...init,stemHeight:finalStem}} baseStem={baseStem} xPct={Math.max(2,Math.min(98,xFrac*100))} xFrac={xFrac} dotYPct={dotY} displayFields={displayFields} fontSize={fontSize} labelWidth={labelWidth} minM={minM} maxM={maxM} zoom={zoom} autoZIndex={1000+stemRank[init.id]} onUpdateDate={date=>onUpdateInitiative(init.id,{date})} onUpdateOffsetY={o=>onUpdateInitiative(init.id,{offsetY:o})} onUpdateDateAndOffset={(date,offsetY)=>onUpdateInitiative(init.id,{date,offsetY})} onUpdateStemHeight={h=>onUpdateInitiative(init.id,{stemHeight:h})} onUpdateLabelWidth={w=>onUpdateInitiative(init.id,{labelWidth:w})} onRemoveFromMap={()=>onUpdateInitiative(init.id,{onMap:false,offsetY:undefined})} onUpdateProgress={p=>onUpdateInitiative(init.id,{progress:p})} onFocusInit={onFocusInit}/>
             );
           });
         })()}
@@ -2539,6 +2581,139 @@ function InitiativeTrackerView({initiatives, onUpdateInitiative, settings, onUpd
     onUpdateInitiative(initId,{checkInNotes:notes});
   };
 
+  // ── Export to PDF ──────────────────────────────────────────────────────
+  // Opens a print-ready report in a new window and triggers the browser's print
+  // dialog (which can "Save as PDF"). No external library needed.
+  const escapeHTML = (s) => String(s==null?"":s).replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  const exportPDF = () => {
+    const total = initiatives.length;
+    // Group by progress (treat missing as "No status")
+    const byProgress = {};
+    initiatives.forEach(i => {
+      const k = i.progress || "No status";
+      byProgress[k] = (byProgress[k]||0) + 1;
+    });
+    // Group by block name (treat missing as "Unassigned")
+    const byBlock = {};
+    initiatives.forEach(i => {
+      const k = (i.blockName||"").trim() || "Unassigned";
+      byBlock[k] = (byBlock[k]||0) + 1;
+    });
+    // For each initiative, find the most recent meeting note.
+    // "Most recent" = the latest non-empty note in check-in order (last one added).
+    const checkInsOrdered = checkIns; // settings.checkIns retains the order they were added
+    const getLatestNote = (init) => {
+      const notes = init.checkInNotes || {};
+      for (let i = checkInsOrdered.length - 1; i >= 0; i--) {
+        const ci = checkInsOrdered[i];
+        const txt = (notes[ci.id]||"").trim();
+        if (txt) return { label: ci.label, text: txt };
+      }
+      return null;
+    };
+    const progressColorHex = (p) => (PROGRESS_COLORS[p]?.dot) || "#cccccc";
+    const catColorHex = (c) => CAT_COLORS[c] || "#888";
+    const fmtDate = (d) => {
+      if (!d || d.length<7) return "—";
+      const [y,m] = d.split("-");
+      const monthName = MONTHS_FULL[parseInt(m,10)-1] || m;
+      return `${monthName} ${y}`;
+    };
+    const title = (settings.mapTitle || "Initiative Tracker") + " — Report";
+    const generatedAt = new Date().toLocaleString();
+
+    const progressRows = Object.entries(byProgress).sort((a,b)=>b[1]-a[1]).map(([k,v])=>
+      `<tr><td><span class="dot" style="background:${progressColorHex(k)}"></span>${escapeHTML(k)}</td><td class="num">${v}</td></tr>`
+    ).join("");
+    const blockRows = Object.entries(byBlock).sort((a,b)=>b[1]-a[1]).map(([k,v])=>
+      `<tr><td>${escapeHTML(k)}</td><td class="num">${v}</td></tr>`
+    ).join("");
+    const sortedForReport = [...initiatives].sort((a,b)=>{
+      const order={WIN:0,DIFF:1,COMPETE:2,OTHER:3};
+      return (order[a.category]??4)-(order[b.category]??4);
+    });
+    const initRows = sortedForReport.map(init=>{
+      const note = getLatestNote(init);
+      const noteBlock = note
+        ? `<div class="note"><div class="note-label">${escapeHTML(note.label)}</div><div class="note-text">${escapeHTML(note.text)}</div></div>`
+        : `<div class="note empty">No meeting notes</div>`;
+      const meta = [
+        init.owner ? `Owner: ${escapeHTML(init.owner)}` : "",
+        init.date ? `Date: ${escapeHTML(fmtDate(init.date))}` : "",
+        init.prize!=null ? `Prize: $${escapeHTML(init.prize)}M` : "",
+        init.blockName ? `Block: ${escapeHTML(init.blockName)}` : "",
+      ].filter(Boolean).join(" &nbsp;·&nbsp; ");
+      return `
+        <div class="init">
+          <div class="init-head">
+            <span class="cat-pill" style="background:${catColorHex(init.category)}1A;color:${catColorHex(init.category)};border:1px solid ${catColorHex(init.category)}66">${escapeHTML(init.category||"—")}</span>
+            <span class="init-name">${escapeHTML(init.name||"Untitled")}</span>
+            ${init.progress ? `<span class="prog"><span class="dot" style="background:${progressColorHex(init.progress)}"></span>${escapeHTML(init.progress)}</span>` : ""}
+          </div>
+          ${meta?`<div class="meta">${meta}</div>`:""}
+          ${noteBlock}
+        </div>`;
+    }).join("");
+
+    const html = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${escapeHTML(title)}</title>
+<style>
+  @page { size: letter; margin: 0.6in; }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; color:#1a1a1a; margin:0; padding:0; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  h1 { font-size: 22px; margin: 0 0 4px; font-weight: 800; letter-spacing: -0.01em; }
+  .sub { font-size: 11px; color:#888; margin-bottom: 24px; }
+  h2 { font-size: 13px; margin: 22px 0 8px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color:#666; border-bottom: 1px solid #eee; padding-bottom: 4px; }
+  .summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 8px; }
+  .stat { background:#fafafa; border:1px solid #eee; border-radius:8px; padding:14px 16px; }
+  .stat .label { font-size: 10px; text-transform:uppercase; letter-spacing:0.08em; color:#888; font-weight:700; }
+  .stat .value { font-size: 26px; font-weight: 800; margin-top: 4px; color:#FF0983; }
+  .tables { display:grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  table { width:100%; border-collapse: collapse; font-size: 11px; }
+  th, td { padding: 6px 8px; text-align: left; border-bottom: 1px solid #f0f0f0; }
+  th { font-size: 9px; text-transform: uppercase; letter-spacing:0.05em; color:#888; font-weight:700; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+  .init { padding: 10px 0; border-bottom: 1px solid #efefef; page-break-inside: avoid; }
+  .init-head { display:flex; align-items:center; gap: 10px; flex-wrap: wrap; }
+  .cat-pill { font-size: 9px; font-weight: 700; padding: 2px 8px; border-radius: 4px; letter-spacing: 0.05em; }
+  .init-name { font-size: 13px; font-weight: 700; }
+  .prog { font-size: 10px; color:#555; display:inline-flex; align-items:center; }
+  .meta { font-size: 10px; color: #888; margin: 4px 0 6px; }
+  .note { background: #fafafa; border-left: 3px solid #FF0983; padding: 8px 10px; border-radius: 0 4px 4px 0; margin-top: 4px; }
+  .note.empty { border-left-color: #ddd; color:#aaa; font-style: italic; font-size: 10px; }
+  .note-label { font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em; color:#888; font-weight:700; margin-bottom: 2px; }
+  .note-text { font-size: 11px; color:#222; white-space: pre-wrap; line-height: 1.4; }
+  .footer { margin-top: 24px; font-size: 9px; color:#bbb; text-align: center; }
+  @media print { body { padding: 0; } }
+</style></head><body>
+  <h1>${escapeHTML(title)}</h1>
+  <div class="sub">Generated ${escapeHTML(generatedAt)}</div>
+  <div class="summary">
+    <div class="stat"><div class="label">Total Initiatives</div><div class="value">${total}</div></div>
+    <div class="stat"><div class="label">Progress Statuses</div><div class="value">${Object.keys(byProgress).length}</div></div>
+    <div class="stat"><div class="label">Blocks</div><div class="value">${Object.keys(byBlock).length}</div></div>
+  </div>
+  <div class="tables">
+    <div>
+      <h2>By Progress</h2>
+      <table><thead><tr><th>Status</th><th class="num">Count</th></tr></thead><tbody>${progressRows||'<tr><td colspan="2" style="color:#aaa">No data</td></tr>'}</tbody></table>
+    </div>
+    <div>
+      <h2>By Block</h2>
+      <table><thead><tr><th>Block</th><th class="num">Count</th></tr></thead><tbody>${blockRows||'<tr><td colspan="2" style="color:#aaa">No data</td></tr>'}</tbody></table>
+    </div>
+  </div>
+  <h2>Initiatives · Latest Meeting Notes</h2>
+  ${initRows || '<div style="color:#aaa;font-size:12px">No initiatives yet.</div>'}
+  <div class="footer">${escapeHTML(title)} · ${total} initiative${total===1?"":"s"}</div>
+  <script>window.onload=()=>{setTimeout(()=>{window.focus();window.print();},150);};<\/script>
+</body></html>`;
+    const w = window.open("", "_blank", "width=900,height=1100");
+    if (!w) { alert("Please allow pop-ups to export the PDF report."); return; }
+    w.document.open(); w.document.write(html); w.document.close();
+  };
+
   const COL_STYLE={fontSize:11,padding:"6px 8px",borderBottom:"1px solid #f0f0f0",verticalAlign:"middle"};
   const HDR_STYLE={fontSize:10,fontWeight:700,color:"#888",padding:"6px 8px 2px",background:"#fafafa",position:"sticky",top:0,zIndex:2,borderBottom:"none",whiteSpace:"nowrap",textTransform:"uppercase",letterSpacing:"0.05em"};
   const FLT_STYLE={fontSize:10,padding:"2px 6px 6px",background:"#fafafa",position:"sticky",top:28,zIndex:2,borderBottom:"2px solid #e8e8e8"};
@@ -2614,6 +2789,12 @@ function InitiativeTrackerView({initiatives, onUpdateInitiative, settings, onUpd
         <span style={{fontSize:11,color:"#aaa"}}>{sorted.length}{sorted.length!==initiatives.length?` / ${initiatives.length}`:""} initiative{initiatives.length!==1?"s":""}</span>
         {hasAnyFilter&&<button onClick={clearFilters} style={{fontSize:10,color:"#ef4444",background:"none",border:"1px solid #fca5a5",borderRadius:5,padding:"2px 7px",cursor:"pointer"}}>✕ Clear filters</button>}
         <div style={{marginLeft:"auto",display:"flex",gap:6}}>
+          <button onClick={exportPDF} title="Generate a printable PDF report"
+            style={{fontSize:11,background:"#f5f5f5",color:"#555",border:"1px solid #e0e0e0",borderRadius:6,padding:"4px 10px",cursor:"pointer",fontWeight:600}}
+            onMouseEnter={e=>e.currentTarget.style.background="#ececec"}
+            onMouseLeave={e=>e.currentTarget.style.background="#f5f5f5"}>
+            ↓ Export PDF
+          </button>
           <button onClick={()=>setShowColPanel(p=>!p)}
             style={{fontSize:11,background:showColPanel?"#FF0983":"#f5f5f5",color:showColPanel?"#fff":"#555",border:"1px solid #e0e0e0",borderRadius:6,padding:"4px 10px",cursor:"pointer",fontWeight:600}}>
             ⚙ Columns
@@ -2841,7 +3022,7 @@ function MapView({tab,onUpdate,saveStatus}) {
     <div style={{display:"flex",flex:1,minHeight:0,overflow:"hidden"}}>
       <div style={{flex:1,display:"flex",flexDirection:"column",minWidth:0,overflow:"hidden"}}>
         <SettingsBar settings={settings} horizons={horizons} displayFields={displayFields} fontSize={fontSize} saveStatus={saveStatus} onToggleField={toggleField} onUpdateSettings={d=>onUpdate({settings:{...settings,...d}})} onUpdateHorizons={h=>onUpdate({horizons:h})} onFontSizeChange={fs=>onUpdate({fontSize:fs})} labelWidth={labelWidth} onLabelWidthChange={w=>onUpdate({labelWidth:w})}/>
-        <MomentumCanvas initiatives={initiatives} horizons={horizons} settings={settings} displayFields={displayFields} fontSize={fontSize} labelWidth={labelWidth} draggingInit={draggingInit} onDrop={init=>updateInitiative(init.id,{onMap:true,offsetY:0})} onUpdateInitiative={updateInitiative} onFocusInit={setFocusedInitId}/>
+        <MomentumCanvas initiatives={initiatives} horizons={horizons} settings={settings} displayFields={displayFields} fontSize={fontSize} labelWidth={labelWidth} draggingInit={draggingInit} onDrop={init=>updateInitiative(init.id,{onMap:true,offsetY:0})} onUpdateInitiative={updateInitiative} onUpdateSettings={d=>onUpdate({settings:{...settings,...d}})} onFocusInit={setFocusedInitId}/>
       </div>
       <InitiativePanel initiatives={initiatives} onAdd={addInitiative} onDelete={deleteInitiative} onUpdate={updateInitiative} onDragStart={setDraggingInit} onDragEnd={()=>setDraggingInit(null)} pyramid={pyramid||makeDefaultPyramid()} syncUrl={tab.syncUrl||null} onSetSyncUrl={url=>onUpdate({syncUrl:url})} panelWidth={panelWidth} onPanelEdgeDown={handlePanelEdgeDown} focusedInitId={focusedInitId} onClearFocus={()=>setFocusedInitId(null)}/>
     </div>
