@@ -55,7 +55,12 @@
 </head>
 <body>
 <div id="root"></div>
-<script type="text/babel" data-presets="react">
+<script>
+// Force Babel standalone to use the classic JSX runtime (avoids import statements in eval'd code)
+document.addEventListener('DOMContentLoaded',()=>{},false);
+Babel.registerPreset('react-classic',{presets:[[Babel.availablePresets['react'],{runtime:'classic'}]]});
+</script>
+<script type="text/babel" data-presets="react-classic">
 const { useState, useRef, useCallback, useEffect, useMemo } = React;
 
 const API = "https://momentum-map-iakx.onrender.com";
